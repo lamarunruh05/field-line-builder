@@ -1,0 +1,1 @@
+{"name":"field-line-builder","version":"0.1.0","private":true,"scripts":{"start":"vite --host 0.0.0.0","build":"vite build"},"dependencies":{"@turf/turf":"^7.2.0","leaflet":"^1.9.4","shp-write":"^0.3.2"},"devDependencies":{"vite":"^7.1.7"}}
