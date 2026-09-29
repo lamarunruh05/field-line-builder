@@ -1,4 +1,4 @@
-import L from 'leaflet'; import * as turf from '@turf/turf'; import shpwrite from 'shp-write'; import './style.css';
+import L from 'leaflet'; import 'leaflet/dist/leaflet.css'; import * as turf from '@turf/turf'; import shpwrite from 'shp-write'; import './style.css';
 const map=L.map('map',{zoomControl:true}).setView([-17.79,-50.92],13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
 const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,attribution:'Tiles © Esri'}).addTo(map);

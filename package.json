@@ -1,1 +1,19 @@
-{"name":"field-line-builder","version":"0.1.0","private":true,"scripts":{"start":"vite --host 0.0.0.0","build":"vite build"},"dependencies":{"@turf/turf":"^7.2.0","leaflet":"^1.9.4","shp-write":"^0.3.2"},"devDependencies":{"vite":"^7.1.7"}}
+{
+  "name": "field-line-builder",
+  "version": "0.1.1",
+  "private": true,
+  "scripts": {
+    "start": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "@turf/turf": "^7.4.0",
+    "leaflet": "^1.9.4",
+    "shp-write": "^0.3.2"
+  },
+  "devDependencies": {
+    "vite": "^7.3.6",
+    "wrangler": "^4.143.0"
+  }
+}
