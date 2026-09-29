@@ -123,10 +123,39 @@ function generateGuidance(source,additional=false){let width=+$('#gw').value||9,
  }
  S.width=width;let referencePoints=source==='border'?null:(guideDraft?.points||[]).map(p=>p.slice());S.guidanceSets.push({name,kind:'main',source,lines,borderIndex:source==='border'?S._border:null,referencePoints});guideDraft=null;redraw();open(`<h3>Guidance Preview</h3><div class="status">${escapeHtml(name)}<br>${lines.length} guidance lines • ${width.toFixed(2)} m</div><div class="row"><button id="keep" class="primary">Save Guidance</button><button id="remove">Discard</button></div>`);$('#keep').onclick=editFieldScreen;$('#remove').onclick=()=>{S.guidanceSets.pop();redraw();guidanceMenu()}}
 
-function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="geo" class="primary">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><button id="back">Back</button>`);$('#geo').onclick=()=>dl(new Blob([JSON.stringify(fc(),null,2)],{type:'application/json'}),safe(S.name)+'.geojson');$('#shp').onclick=()=>shpwrite.download(fc(),{folder:safe(S.name),types:{polygon:'boundary',line:'lines',point:'points'}});$('#back').onclick=editFieldScreen}
+function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="geo" class="primary">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><button id="back">Back</button>`);$('#geo').onclick=()=>dl(new Blob([JSON.stringify(fc(),null,2)],{type:'application/json'}),safe(S.name)+'.geojson');$('#shp').onclick=downloadShapefile;$('#back').onclick=editFieldScreen}
 function fc(){let f=[turf.polygon([ring()],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
 function safe(s){return(s||'field').replace(/[^a-z0-9_-]+/gi,'_')}
-function dl(blob,n){let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=n;a.click()}
+async function downloadShapefile(){
+  const btn=$('#shp');
+  const oldText=btn.textContent;
+  try{
+    btn.disabled=true; btn.textContent='Preparing ZIP…';
+    const options={folder:safe(S.name),types:{polygon:'boundary',line:'lines',point:'points'}};
+    const out=await Promise.resolve(shpwrite.zip(fc(),options));
+    let blob;
+    if(out instanceof Blob) blob=out;
+    else if(out instanceof ArrayBuffer) blob=new Blob([out],{type:'application/zip'});
+    else if(ArrayBuffer.isView(out)) blob=new Blob([out.buffer],{type:'application/zip'});
+    else if(typeof out==='string'){
+      const base64=out.includes(',')?out.split(',').pop():out;
+      const bin=atob(base64), bytes=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+      blob=new Blob([bytes],{type:'application/zip'});
+    } else throw new Error('Shapefile library returned an unsupported ZIP format.');
+    dl(blob,safe(S.name)+'-isoview.zip');
+  }catch(err){
+    console.error('Shapefile export failed:',err);
+    alert('Could not create the Shapefile ZIP. '+(err?.message||err));
+  }finally{btn.disabled=false;btn.textContent=oldText}
+}
+function dl(blob,n){
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=n; a.style.display='none';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
 function showFieldsHome(){removeHandle();removeGuideHandle();guideDraft=null;hidePointMenu();mode=null;mapBar.classList.add('hidden');home.classList.add('hidden');let cards=DB.fields.map(f=>{let old=S;S=f;let a=area().toFixed(2);S=old;return `<div class="field-card"><div><b>${escapeHtml(f.name)}</b><small>${a} ha</small></div><div class="field-card-actions"><button data-view="${f.id}" class="primary">View</button><button data-menu="${f.id}">⋮</button></div></div>`}).join('');open(`<div class="fields-head"><h2>My Fields</h2><button id="newFromList" class="primary">+ New Field</button></div>${!localStorage.getItem('flbGoogleMapsKey')?'<button id="setupGoogleHome" class="primary">Enable Google Satellite</button>':''}${cards||'<p>No fields saved yet. Create your first field.</p>'}`);$('#newFromList').onclick=newField;if($('#setupGoogleHome'))$('#setupGoogleHome').onclick=googleMapSetup;document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>openField(+b.dataset.view));document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>fieldItemMenu(+b.dataset.menu));redraw()}
 function openField(id){let f=DB.fields.find(x=>x.id===id);if(!f)return;S=f;DB.currentId=id;save();if(S.boundary.length)map.fitBounds(L.latLngBounds(S.boundary),{padding:[45,45],maxZoom:19});viewFieldScreen()}
 function fieldItemMenu(id){let f=DB.fields.find(x=>x.id===id);if(!f)return;open(`<h3>${escapeHtml(f.name)}</h3><button id="deleteField" class="danger">Delete Field</button><button id="back">Back</button>`);$('#deleteField').onclick=()=>{if(confirm(`Delete ${f.name}? This cannot be undone.`)){DB.fields=DB.fields.filter(x=>x.id!==id);if(DB.currentId===id)DB.currentId=null;localStorage.setItem('flbFields',JSON.stringify(DB));S=emptyField();redraw();showFieldsHome()}};$('#back').onclick=showFieldsHome}
