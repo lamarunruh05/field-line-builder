@@ -144,7 +144,7 @@ function makeHeadlands(){S.guidanceSets=(S.guidanceSets||[]).filter(x=>x.kind!==
 
 function mainSets(){return(S.guidanceSets||[]).filter(x=>x.kind==='main')}
 function editGuidanceMenu(){let sets=(S.guidanceSets||[]).map((x,i)=>({x,i})).filter(o=>o.x.kind==='main');if(!sets.length)return alert('There are no saved guidance lines to edit yet.');open(`<h3>Edit Guidance</h3><p>Select the guidance set you want to recreate or remove.</p><div class="section-list">${sets.map(o=>`<button data-g="${o.i}">${escapeHtml(o.x.name)} • ${o.x.lines.length} lines</button>`).join('')}</div><button id="back">Back</button>`);document.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>editGuidanceSet(+b.dataset.g));$('#back').onclick=editFieldScreen}
-function editGuidanceSet(i){let set=S.guidanceSets[i];open(`<h3>${escapeHtml(set.name)}</h3><div class="status">${set.lines.length} guidance lines</div><div class="row"><button id="recreate" class="primary">Recreate / Adjust</button><button id="deleteG" class="danger">Delete</button></div><button id="back">Back</button>`);$('#deleteG').onclick=()=>{if(confirm('Delete this guidance set?')){S.guidanceSets.splice(i,1);redraw();editFieldScreen()}};$('#recreate').onclick=()=>{S.guidanceSets.splice(i,1);if(set.source==='border'&&Number.isInteger(set.borderIndex)&&S.sections[set.borderIndex]){S._border=set.borderIndex;guidanceOptions('border',false)}else if((set.source==='ab'||set.source==='curve')&&set.referencePoints){guideDraft={type:set.source,points:set.referencePoints.map(p=>p.slice()),additional:false};startGuideDraft(set.source,false)}else guidanceMenu()};$('#back').onclick=editGuidanceMenu}
+function editGuidanceSet(i){let set=S.guidanceSets[i];open(`<h3>${escapeHtml(set.name)}</h3><div class="status">${set.lines.length} guidance lines</div><label>Guide name<input id="renameGuide" value="${escapeHtml(set.name||'')}" placeholder="${i===mainSets().findIndex(x=>x===set)?'Main Guide':'Additional Guide'}"></label><button id="saveGuideName">Save Name</button><div class="row"><button id="recreate" class="primary">Recreate / Adjust</button><button id="deleteG" class="danger">Delete</button></div><button id="back">Back</button>`);$('#saveGuideName').onclick=()=>{let mains=mainSets(),pos=mains.indexOf(set),fallback=pos<=0?'Main Guide':'Additional Guide '+pos;set.name=$('#renameGuide').value.trim()||fallback;save();editGuidanceSet(i)};$('#deleteG').onclick=()=>{if(confirm('Delete this guidance set?')){S.guidanceSets.splice(i,1);redraw();editFieldScreen()}};$('#recreate').onclick=()=>{S.guidanceSets.splice(i,1);if(set.source==='border'&&Number.isInteger(set.borderIndex)&&S.sections[set.borderIndex]){S._border=set.borderIndex;guidanceOptions('border',false)}else if((set.source==='ab'||set.source==='curve')&&set.referencePoints){guideDraft={type:set.source,points:set.referencePoints.map(p=>p.slice()),additional:false};startGuideDraft(set.source,false)}else guidanceMenu()};$('#back').onclick=editGuidanceMenu}
 function guidanceMenu(){let additional=mainSets().length>0;open(`<h3>${additional?'Create Additional Guide':'Create Guidance'}</h3><p>${additional?'Add another guidance area without replacing the existing guide.':'Choose how the main guidance reference is created.'}</p><div class="field-actions"><button id="from">Create from Border</button><button id="ab" class="primary">Draw AB</button><button id="curve">Draw Curve</button></div><button id="back">Back</button>`);$('#ab').onclick=()=>startGuideDraft('ab',additional);$('#curve').onclick=()=>startGuideDraft('curve',additional);$('#from').onclick=()=>borderList(additional);$('#back').onclick=editFieldScreen}
 function borderList(additional=false){let named=S.sections.map((s,i)=>({s,i})).filter(o=>o.s.name);if(!named.length)return alert('Name at least one border section first.');open(`<h3>Create from Border</h3><p>Tap a border to highlight it, then use Select Highlighted Border.</p><div class="section-list">${named.map(o=>`<button data-i="${o.i}">${escapeHtml(o.s.name)}</button>`).join('')}</div><button id="useBorder" class="primary" disabled>Select Highlighted Border</button><button id="back">Back</button>`);let chosen=null;document.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{chosen=+b.dataset.i;if(highlightLayer)map.removeLayer(highlightLayer);highlightLayer=L.polyline(sectionLatLngs(S.sections[chosen]),{color:'#ff2d55',weight:8,opacity:.85,interactive:false}).addTo(map);document.querySelectorAll('[data-i]').forEach(x=>x.classList.remove('selected'));b.classList.add('selected');$('#useBorder').disabled=false});$('#useBorder').onclick=()=>{if(chosen==null)return;S._border=chosen;if(highlightLayer){map.removeLayer(highlightLayer);highlightLayer=null}guidanceOptions('border',additional)};$('#back').onclick=guidanceMenu}
 function startGuideDraft(type,additional=false){guideDraft=guideDraft&&guideDraft.type===type?guideDraft:{type,points:[],additional};guideDraft.additional=additional;mode='guide-draw';close();S.stage='saved';updateGuideBar();redraw()}
@@ -152,7 +152,7 @@ function updateGuideBar(){if(!guideDraft)return;let need=guideDraft.type==='ab'?
 function guidanceOptions(source,additional=false){
  let label=source==='ab'?'A-B reference':source==='curve'?'Curved reference':'From '+S.sections[S._border].name;
  let extra=additional?`<label>Coverage<select id="coverage"><option value="remaining">Fill Remaining Space</option><option value="count">Set Left / Right Quantities</option></select></label><div id="qtyBox" class="hidden"><div class="row"><label>Left quantity<input id="leftQty" type="number" min="0" placeholder="0"></label><label>Right quantity<input id="rightQty" type="number" min="0" placeholder="0"></label></div><div class="muted">Leave a side blank for no lines on that side. The reference line itself is included when it fits.</div></div>`:`<label>Coverage<select id="coverage"><option value="fill">Fill Entire Field</option><option value="count">Set Number of Lines</option></select></label><label id="countLab" class="hidden">Number of lines<input id="gc" type="number" min="1" value="10"></label>`;
- open(`<h3>${additional?'Additional Guidance Settings':'Guidance Settings'}</h3><p>${escapeHtml(label)}</p><label>Guidance set name<input id="gn" value="${additional?'Additional rows':source==='border'?escapeHtml(S.sections[S._border].name)+' rows':'Main rows'}"></label><label>Implement width (m)<input id="gw" type="number" step="0.01" value="${S.width||9}"></label>${extra}<button id="preview" class="primary">Preview Guidance</button><button id="back">Back</button>`);
+ open(`<h3>${additional?'Additional Guidance Settings':'Guidance Settings'}</h3><p>${escapeHtml(label)}</p><label>Guide name (optional)<input id="gn" value="" placeholder="${additional?'Additional Guide '+(mainSets().length):'Main Guide'}"></label><label>Implement width (m)<input id="gw" type="number" step="0.01" value="${S.width||9}"></label>${extra}<button id="preview" class="primary">Preview Guidance</button><button id="back">Back</button>`);
  if(additional)$('#coverage').onchange=()=>$('#qtyBox').classList.toggle('hidden',$('#coverage').value!=='count');else $('#coverage').onchange=()=>$('#countLab').classList.toggle('hidden',$('#coverage').value!=='count');
  $('#preview').onclick=()=>generateGuidance(source,additional);$('#back').onclick=()=>{if(source==='ab'||source==='curve')startGuideDraft(source,additional);else guidanceMenu()}
 }
@@ -271,7 +271,7 @@ function usableCandidateParts(parts,width){
  return parts.filter(f=>turf.length(f,{units:'meters'})>=Math.max(.75,width*.12));
 }
 function generateGuidance(source,additional=false){
- let width=+$('#gw').value||9,name=$('#gn').value.trim()||'Guidance',p=usablePoly(),lines=[],coverage=$('#coverage').value,base=baseReference(source);
+ let width=+$('#gw').value||9,name=$('#gn').value.trim()||(additional?'Additional Guide '+mainSets().length:'Main Guide'),p=usablePoly(),lines=[],coverage=$('#coverage').value,base=baseReference(source);
  if(!p||!base||turf.length(base,{units:'meters'})<1)return alert('The reference line is too short.');
  let mask=additional?existingCoverage(width):null;
  let requested=!additional&&coverage==='count'?Math.max(1,+$('#gc').value||1):Infinity;
@@ -327,57 +327,64 @@ function densifyIsoViewLine(latlngs,maxMeters=3){
  if(!prev||prev[0]!==last[0]||prev[1]!==last[1])out.push(last);
  return out
 }
+function uniqueIsoBase(wanted,used){
+ let base=(safe(wanted)||'Guide').slice(0,36),candidate=base,n=2;
+ while(used.has(candidate.toLowerCase())){let suffix='_'+n++;candidate=(base.slice(0,36-suffix.length)+suffix)}
+ used.add(candidate.toLowerCase());return candidate
+}
 function isoViewGuideEntries(){
- let entries=[];
- mainSets().forEach((set,setIndex)=>set.lines.forEach((g,lineIndex)=>{
-  let coords=densifyIsoViewLine(g,3);
-  if(coords.length<2)return;
-  let setNo=String(setIndex+1).padStart(2,'0'),lineNo=String(lineIndex+1).padStart(3,'0');
-  let base=((safe(S.name)||'FIELD').slice(0,22)+'_G'+setNo+'_L'+lineNo).slice(0,36);
-  entries.push({base,setIndex,lineIndex,fc:turf.featureCollection([
-   turf.lineString(coords,{GUIDE:setIndex+1,LINE:lineIndex+1,NAME:String(set.name||('Guide '+(setIndex+1))).slice(0,40)})
-  ])});
- }));
+ let entries=[],used=new Set();
+ // Border passes are exported as one named Project map. Keep every complete
+ // perimeter pass as a part of the same feature so the GPS can be tested with
+ // one easy-to-identify "Borders" selection.
+ let head=(S.guidanceSets||[]).find(x=>x.kind==='headland'&&x.lines&&x.lines.length);
+ if(head){
+  let parts=head.lines.map(g=>densifyIsoViewLine(g,3)).filter(c=>c.length>=2);
+  if(parts.length){let base=uniqueIsoBase('Borders',used);entries.push({base,label:'Borders',fc:turf.featureCollection([turf.multiLineString(parts,{NAME:'Borders',TYPE:'BORDERS'})])})}
+ }
+ // IsoView treats each Project guidance row as an independently selectable
+ // guide map. Use the user's guide name for the filename. Only add a row
+ // suffix when a guidance set actually contains more than one exported row.
+ mainSets().forEach((set,setIndex)=>{
+  let valid=(set.lines||[]).map(g=>densifyIsoViewLine(g,3)).filter(c=>c.length>=2);
+  let label=(String(set.name||'').trim()||(setIndex===0?'Main Guide':'Additional Guide '+setIndex));
+  valid.forEach((coords,lineIndex)=>{
+   let wanted=valid.length===1?label:(label+' '+String(lineIndex+1).padStart(2,'0'));
+   let base=uniqueIsoBase(wanted,used);
+   entries.push({base,label:wanted,fc:turf.featureCollection([turf.lineString(coords,{GUIDE:setIndex+1,LINE:lineIndex+1,NAME:label.slice(0,40)})])});
+  });
+ });
  return entries
 }
 async function exportIsoViewGuideMap(){
  let b=$('#isoGuide'),st=$('#exportStatus'),entries=isoViewGuideEntries();
  if(!entries.length){st.textContent='Create and save guidance lines first.';return}
  try{
-  b.disabled=true;st.textContent='Building IsoView multi-line guide project…';
-
-  // IsoView "Project" guide maps are one Shapefile containing a set of
-  // predetermined lines. Some IsoView firmware only renders the first SHP
-  // *record*, even when a file contains several LineString records. A Shapefile
-  // PolyLine record can contain several parts, so write every guidance row as
-  // one MultiLineString feature (one SHP record, many independent line parts).
-  // This lets IsoView load the whole project at once while keeping the lines
-  // separate (no artificial connector between the end of one row and the next).
-  let parts=entries.map(e=>e.fc.features[0].geometry.coordinates);
-  let project=turf.featureCollection([
-   turf.multiLineString(parts,{
-    NAME:String(S.name||'Guide Project').slice(0,40),
-    GUIDES:parts.length
-   })
-  ]);
-
-  let base=((safe(S.name)||'FIELD').slice(0,28)+'_GUIDES').slice(0,36);
-  let data=await shpwrite.zip(project,{folder:base,outputType:'blob',types:{polyline:base}});
-  let dataBlob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});
-
-  // Flatten shp-write's folder so the required SHP/SHX/DBF/PRJ files are
-  // immediately visible when the ZIP is extracted to the USB root.
-  let src=await JSZip.loadAsync(await dataBlob.arrayBuffer()),out=new JSZip();
-  for(let name of Object.keys(src.files)){
-   let f=src.files[name]; if(f.dir)continue;
-   let leaf=name.split('/').pop(); if(!leaf)continue;
-   out.file(leaf,await f.async('uint8array'));
+  b.disabled=true;st.textContent='Building IsoView guide-map package…';
+  // IsoView previewed only the first feature when several guidance rows were
+  // stored in one SHP. Package every actual guidance row as its own complete
+  // SHP/SHX/DBF/PRJ set, while keeping them all in ONE download ZIP. On the
+  // monitor use Guide Maps > Import - Pen drive > Import all.
+  let out=new JSZip();
+  for(let i=0;i<entries.length;i++){
+   let e=entries[i];
+   st.textContent=`Building IsoView guide ${i+1} of ${entries.length}…`;
+   let one=await shpwrite.zip(e.fc,{folder:e.base,outputType:'blob',types:{polyline:e.base}});
+   let oneBlob=one instanceof Blob?one:new Blob([one],{type:'application/zip'});
+   let z=await JSZip.loadAsync(await oneBlob.arrayBuffer());
+   for(let name of Object.keys(z.files)){
+    let f=z.files[name]; if(f.dir)continue;
+    let leaf=name.split('/').pop();
+    if(!leaf)continue;
+    out.file(leaf,await f.async('uint8array'));
+   }
   }
-  out.file('README.txt',`IsoView Guide Project\r\nField: ${S.name||''}\r\nGuidance lines: ${parts.length}\r\nProjection: WGS84 / EPSG:4326\r\n\r\nExtract the SHP, SHX, DBF and PRJ files together to the USB drive.\r\nOn IsoView import ${base}.SHP as a Guide Map, then choose Guide Pattern = Project.\r\nAll ${parts.length} guidance lines are stored as separate parts inside this single guide project.\r\n`);
+  out.file('README.txt',`IsoView Guide Map package\r\nField: ${S.name||''}\r\nGuidance maps: ${entries.length}\r\n\r\nExtract all files together to the USB drive.\r\nOn IsoView: Settings > Memory > Input Maps > Guide Maps > Import - Pen drive > Import all.\r\nFiles use the guide names from Field Line Builder. Borders is the border-pass project; named guides keep their names. If one guide set contains several rows, numbered suffixes are added.\r\n`);
   let blob=await out.generateAsync({type:'blob',compression:'DEFLATE'});
+  let base=(safe(S.name)||'ISOVIEW_GUIDES').slice(0,28)+'_ISOVIEW_GUIDES';
   downloadBlob(blob,base+'.zip');
-  st.textContent=`IsoView project ready: ${parts.length} guidance line${parts.length===1?'':'s'} in one SHP project. Extract the ZIP to the USB and import ${base}.SHP.`;
- }catch(e){console.error(e);st.textContent='Could not create IsoView guide project: '+(e?.message||e)}finally{b.disabled=false}
+  st.textContent=`IsoView package ready: ${entries.length} separate guide map${entries.length===1?'':'s'} in one ZIP. Extract all files to the USB, then use Guide Maps > Import - Pen drive > Import all.`
+ }catch(e){console.error(e);st.textContent='Could not create IsoView guide maps: '+(e?.message||e)}finally{b.disabled=false}
 }
 function fc(){let f=[turf.polygon([ring(true)],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
 function safe(s){return(s||'field').replace(/[^a-z0-9_-]+/gi,'_')}
