@@ -209,6 +209,23 @@ function extendCurvedReference(base,p){
  let after=turf.destination(end,diag,endBearing,{units:'meters'}).geometry.coordinates;
  return turf.lineString([before,...c,after]);
 }
+function extendGeneratedCurve(line,p){
+ // Extend EACH generated offset curve from both of its own endpoints.  The
+ // reference may be shorter than the field, and lineOffset preserves that
+ // finite length.  Therefore the field polygon -- not the reference endpoints
+ // -- must decide where a guidance row begins and ends.
+ let c=line.geometry.coordinates;if(c.length<2)return line;
+ let box=turf.bbox(p),diag=Math.max(200,turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'})*3);
+ // Use points a short distance in from each end so tiny offset artefacts do not
+ // send the extension in a bad direction.
+ let n=Math.min(4,c.length-1);
+ let s=turf.point(c[0]),si=turf.point(c[n]);
+ let e=turf.point(c[c.length-1]),ei=turf.point(c[c.length-1-n]);
+ let sb=turf.bearing(si,s),eb=turf.bearing(ei,e);
+ let before=turf.destination(s,diag,sb,{units:'meters'}).geometry.coordinates;
+ let after=turf.destination(e,diag,eb,{units:'meters'}).geometry.coordinates;
+ return turf.lineString([before,...c,after]);
+}
 function curvedOffset(base,off,p){
  try{
   // Extend first, then offset. This makes every curved row long enough to be
@@ -220,6 +237,9 @@ function curvedOffset(base,off,p){
    coords.push(turf.along(working,len,{units:'meters'}).geometry.coordinates);
    ref=turf.lineOffset(turf.lineString(coords),off,{units:'meters'});
   }
+  // lineOffset still has finite endpoints. Extend the RESULTING row on its
+  // own end tangents, then let the usable field polygon trim both ends.
+  ref=extendGeneratedCurve(ref,p);
   return clipLine(ref,p).filter(f=>{
    let len=turf.length(f,{units:'meters'});if(len<.75)return false;
    for(let q=0;q<=4;q++)if(!turf.booleanPointInPolygon(turf.along(f,len*q/4,{units:'meters'}),p,{ignoreBoundary:false}))return false;
