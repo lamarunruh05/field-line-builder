@@ -327,31 +327,38 @@ function densifyIsoViewLine(latlngs,maxMeters=3){
  if(!prev||prev[0]!==last[0]||prev[1]!==last[1])out.push(last);
  return out
 }
-function uniqueIsoBase(wanted,used){
- let base=(safe(wanted)||'Guide').slice(0,36),candidate=base,n=2;
- while(used.has(candidate.toLowerCase())){let suffix='_'+n++;candidate=(base.slice(0,36-suffix.length)+suffix)}
+function isoFilePart(s,fallback='Guide'){
+ return String(s||fallback).replace(/[\\/:*?"<>|]+/g,' ').replace(/\s+/g,' ').trim()||fallback
+}
+function uniqueIsoBase(label,used){
+ // Keep the field name visible on every IsoView file so maps from several
+ // fields can safely live together on the same USB drive.
+ let field=isoFilePart(S.name,'Field'),guide=isoFilePart(label,'Guide');
+ let base=`${field}-${guide}`.slice(0,60).trim(),candidate=base,n=2;
+ while(used.has(candidate.toLowerCase())){let suffix=`-${n++}`;candidate=(base.slice(0,60-suffix.length)+suffix).trim()}
  used.add(candidate.toLowerCase());return candidate
 }
 function isoViewGuideEntries(){
  let entries=[],used=new Set();
- // One exported shapefile per logical guide group. Each individual pass/row
- // is stored as a separate LineString feature inside that one SHP.
+ // IsoView Project guides use one reference line. It creates/uses the working
+ // parallels itself; exporting every generated parallel only makes the map
+ // ambiguous and IsoView displays the first one anyway.
  let head=(S.guidanceSets||[]).find(x=>x.kind==='headland'&&x.lines&&x.lines.length);
  if(head){
-  let parts=head.lines.map(g=>densifyIsoViewLine(g,3)).filter(c=>c.length>=2);
-  if(parts.length){
-   let base=uniqueIsoBase('Borders',used);
-   let features=parts.map((coords,i)=>turf.lineString(coords,{GUIDE:1,LINE:i+1,NAME:'Borders',TYPE:'BORDERS'}));
-   entries.push({base,label:'Borders',fc:turf.featureCollection(features),lineCount:features.length});
+  // Borders is one closed perimeter reference. Keep it as one Project map.
+  let coords=densifyIsoViewLine(head.lines[0],3);
+  if(coords.length>=2){
+   let label='Borders',base=uniqueIsoBase(label,used);
+   entries.push({base,label,fc:turf.featureCollection([turf.lineString(coords,{GUIDE:1,NAME:label,TYPE:'BORDERS'})]),lineCount:1});
   }
  }
  mainSets().forEach((set,setIndex)=>{
-  let valid=(set.lines||[]).map(g=>densifyIsoViewLine(g,3)).filter(c=>c.length>=2);
-  if(!valid.length)return;
+  let first=(set.lines||[]).find(g=>Array.isArray(g)&&g.length>=2);
+  if(!first)return;
+  let coords=densifyIsoViewLine(first,3); if(coords.length<2)return;
   let label=(String(set.name||'').trim()||(setIndex===0?'Main Guide':'Additional Guide '+setIndex));
   let base=uniqueIsoBase(label,used);
-  let features=valid.map((coords,lineIndex)=>turf.lineString(coords,{GUIDE:setIndex+1,LINE:lineIndex+1,NAME:label.slice(0,40)}));
-  entries.push({base,label,fc:turf.featureCollection(features),lineCount:features.length});
+  entries.push({base,label,fc:turf.featureCollection([turf.lineString(coords,{GUIDE:setIndex+1,NAME:label.slice(0,40),TYPE:'PROJECT'})]),lineCount:1});
  });
  return entries
 }
@@ -360,8 +367,7 @@ async function exportIsoViewGuideMap(){
  if(!entries.length){st.textContent='Create and save guidance lines first.';return}
  try{
   b.disabled=true;st.textContent='Building IsoView guide-map package…';
-  // Package each logical guide group as one SHP/SHX/DBF/PRJ set. Parallel
-  // rows remain separate LineString features inside that one shapefile.
+  // Package each logical guide as one SHP/SHX/DBF/PRJ set containing one reference line.
   let out=new JSZip();
   for(let i=0;i<entries.length;i++){
    let e=entries[i];
@@ -376,7 +382,7 @@ async function exportIsoViewGuideMap(){
     out.file(leaf,await f.async('uint8array'));
    }
   }
-  out.file('README.txt',`IsoView Guide Map package\r\nField: ${S.name||''}\r\nGuide groups: ${entries.length}\r\n\r\nExtract all files together to the USB drive.\r\nOn IsoView: Settings > Memory > Input Maps > Guide Maps > Import - Pen drive > Import all.\r\nFiles use the guide names from Field Line Builder. Borders is the border-pass project; named guides keep their names. Each named guide exports as one shapefile set containing all of its parallel rows.\r\n`);
+  out.file('README.txt',`IsoView Guide Map package\r\nField: ${S.name||''}\r\nGuide groups: ${entries.length}\r\n\r\nExtract all files together to the USB drive.\r\nOn IsoView: Settings > Memory > Input Maps > Guide Maps > Import - Pen drive > Import all.\r\nFiles use the guide names from Field Line Builder. Borders is the border-pass project; named guides keep their names. Each named guide exports as one Project reference line. IsoView handles the working parallels from that reference. Every filename starts with the field name.\r\n`);
   let blob=await out.generateAsync({type:'blob',compression:'DEFLATE'});
   let base=(safe(S.name)||'ISOVIEW_GUIDES').slice(0,28)+'_ISOVIEW_GUIDES';
   downloadBlob(blob,base+'.zip');
