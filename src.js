@@ -334,25 +334,24 @@ function uniqueIsoBase(wanted,used){
 }
 function isoViewGuideEntries(){
  let entries=[],used=new Set();
- // Border passes are exported as one named Project map. Keep every complete
- // perimeter pass as a part of the same feature so the GPS can be tested with
- // one easy-to-identify "Borders" selection.
+ // One exported shapefile per logical guide group. Each individual pass/row
+ // is stored as a separate LineString feature inside that one SHP.
  let head=(S.guidanceSets||[]).find(x=>x.kind==='headland'&&x.lines&&x.lines.length);
  if(head){
   let parts=head.lines.map(g=>densifyIsoViewLine(g,3)).filter(c=>c.length>=2);
-  if(parts.length){let base=uniqueIsoBase('Borders',used);entries.push({base,label:'Borders',fc:turf.featureCollection([turf.multiLineString(parts,{NAME:'Borders',TYPE:'BORDERS'})])})}
+  if(parts.length){
+   let base=uniqueIsoBase('Borders',used);
+   let features=parts.map((coords,i)=>turf.lineString(coords,{GUIDE:1,LINE:i+1,NAME:'Borders',TYPE:'BORDERS'}));
+   entries.push({base,label:'Borders',fc:turf.featureCollection(features),lineCount:features.length});
+  }
  }
- // IsoView treats each Project guidance row as an independently selectable
- // guide map. Use the user's guide name for the filename. Only add a row
- // suffix when a guidance set actually contains more than one exported row.
  mainSets().forEach((set,setIndex)=>{
   let valid=(set.lines||[]).map(g=>densifyIsoViewLine(g,3)).filter(c=>c.length>=2);
+  if(!valid.length)return;
   let label=(String(set.name||'').trim()||(setIndex===0?'Main Guide':'Additional Guide '+setIndex));
-  valid.forEach((coords,lineIndex)=>{
-   let wanted=valid.length===1?label:(label+' '+String(lineIndex+1).padStart(2,'0'));
-   let base=uniqueIsoBase(wanted,used);
-   entries.push({base,label:wanted,fc:turf.featureCollection([turf.lineString(coords,{GUIDE:setIndex+1,LINE:lineIndex+1,NAME:label.slice(0,40)})])});
-  });
+  let base=uniqueIsoBase(label,used);
+  let features=valid.map((coords,lineIndex)=>turf.lineString(coords,{GUIDE:setIndex+1,LINE:lineIndex+1,NAME:label.slice(0,40)}));
+  entries.push({base,label,fc:turf.featureCollection(features),lineCount:features.length});
  });
  return entries
 }
@@ -361,10 +360,8 @@ async function exportIsoViewGuideMap(){
  if(!entries.length){st.textContent='Create and save guidance lines first.';return}
  try{
   b.disabled=true;st.textContent='Building IsoView guide-map package…';
-  // IsoView previewed only the first feature when several guidance rows were
-  // stored in one SHP. Package every actual guidance row as its own complete
-  // SHP/SHX/DBF/PRJ set, while keeping them all in ONE download ZIP. On the
-  // monitor use Guide Maps > Import - Pen drive > Import all.
+  // Package each logical guide group as one SHP/SHX/DBF/PRJ set. Parallel
+  // rows remain separate LineString features inside that one shapefile.
   let out=new JSZip();
   for(let i=0;i<entries.length;i++){
    let e=entries[i];
@@ -379,7 +376,7 @@ async function exportIsoViewGuideMap(){
     out.file(leaf,await f.async('uint8array'));
    }
   }
-  out.file('README.txt',`IsoView Guide Map package\r\nField: ${S.name||''}\r\nGuidance maps: ${entries.length}\r\n\r\nExtract all files together to the USB drive.\r\nOn IsoView: Settings > Memory > Input Maps > Guide Maps > Import - Pen drive > Import all.\r\nFiles use the guide names from Field Line Builder. Borders is the border-pass project; named guides keep their names. If one guide set contains several rows, numbered suffixes are added.\r\n`);
+  out.file('README.txt',`IsoView Guide Map package\r\nField: ${S.name||''}\r\nGuide groups: ${entries.length}\r\n\r\nExtract all files together to the USB drive.\r\nOn IsoView: Settings > Memory > Input Maps > Guide Maps > Import - Pen drive > Import all.\r\nFiles use the guide names from Field Line Builder. Borders is the border-pass project; named guides keep their names. Each named guide exports as one shapefile set containing all of its parallel rows.\r\n`);
   let blob=await out.generateAsync({type:'blob',compression:'DEFLATE'});
   let base=(safe(S.name)||'ISOVIEW_GUIDES').slice(0,28)+'_ISOVIEW_GUIDES';
   downloadBlob(blob,base+'.zip');
