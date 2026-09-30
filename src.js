@@ -11,7 +11,7 @@ window.L=L;
 const road=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxNativeZoom:19,maxZoom:22,attribution:'© OpenStreetMap'});
 const fallbackSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxNativeZoom:17,maxZoom:22,keepBuffer:4,updateWhenZooming:false,attribution:'© Esri'});
 const map=L.map('map',{layers:[fallbackSat],maxZoom:22}).setView([-17.79,-50.92],13);
-const layerControl=L.control.layers({'Satellite (fallback)':fallbackSat,'Road map':road},null,{collapsed:true}).addTo(map);
+const layerControl=L.control.layers({'Satellite (fallback)':fallbackSat,'Road map':road},null,{collapsed:true,position:'topleft'}).addTo(map);
 let googleSat=null;
 let googleMutantPromise=null;
 function loadGoogleMutant(){
@@ -46,9 +46,40 @@ function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':
 function forwardIdx(a,b){let out=[a],i=a,n=S.boundary.length;while(i!==b){i=(i+1)%n;out.push(i);if(out.length>n+1)break}return out}
 function pathMeters(arr){let d=0;for(let k=1;k<arr.length;k++)d+=turf.distance([S.boundary[arr[k-1]][1],S.boundary[arr[k-1]][0]],[S.boundary[arr[k]][1],S.boundary[arr[k]][0]],{units:'meters'});return d}
 function idxs(a,b){let f=forwardIdx(a,b),r=forwardIdx(b,a).reverse();return pathMeters(f)<=pathMeters(r)?f:r}
-function smoothLatLngs(points){if(points.length<3)return points.map(p=>p.slice());try{let ls=turf.lineString(points.map(([y,x])=>[x,y]));let sm=turf.bezierSpline(ls,{resolution:12000,sharpness:.9});return sm.geometry.coordinates.map(([x,y])=>[y,x])}catch{return points.map(p=>p.slice())}}
-function sectionLatLngs(s){let pts=idxs(s.start,s.end).map(i=>S.boundary[i]);return s.smooth?smoothLatLngs(pts):pts}
-function boundaryLatLngs(){if(!S.boundary.length)return[];let out=[];for(let i=0;i<S.boundary.length;i++){let smoothSection=S.sections.find(s=>s.smooth&&s.start===i);if(smoothSection){let pts=sectionLatLngs(smoothSection);out.push(...pts.slice(0,-1));i=smoothSection.end>i?smoothSection.end-1:i}else out.push(S.boundary[i])}return out.length>=3?out:S.boundary}
+function smoothLatLngs(points){
+ // Shape-preserving Chaikin smoothing: follows the user's polyline and cannot overshoot like a spline.
+ if(points.length<3)return points.map(p=>p.slice());
+ let pts=points.map(p=>p.slice());
+ for(let pass=0;pass<3;pass++){
+  let out=[pts[0].slice()];
+  for(let i=0;i<pts.length-1;i++){
+   let a=pts[i],b=pts[i+1];
+   out.push([a[0]*.75+b[0]*.25,a[1]*.75+b[1]*.25]);
+   out.push([a[0]*.25+b[0]*.75,a[1]*.25+b[1]*.75]);
+  }
+  out.push(pts[pts.length-1].slice());pts=out;
+ }
+ return pts
+}
+function sectionIndices(s){return idxs(s.start,s.end)}
+function sectionLatLngs(s){let pts=sectionIndices(s).map(i=>S.boundary[i]);return s.smooth?smoothLatLngs(pts):pts}
+function boundaryLatLngs(){
+ if(S.boundary.length<3)return S.boundary.map(p=>p.slice());
+ // Walk the actual boundary and substitute saved smooth geometry for the matching run, in either direction.
+ let n=S.boundary.length,out=[],used=new Set(),i=0,guard=0;
+ while(guard++<n*3){
+  if(used.has(i))break; used.add(i);
+  let hit=null,rev=false,path=null;
+  for(const sec of S.sections.filter(x=>x.smooth)){
+   let q=sectionIndices(sec),k=q.indexOf(i);
+   if(k===0){hit=sec;path=q;break}
+   if(k===q.length-1){hit=sec;path=q.slice().reverse();rev=true;break}
+  }
+  if(hit&&path&&path.length>1){let pts=path.map(j=>S.boundary[j]);let sm=smoothLatLngs(pts);out.push(...sm.slice(0,-1));for(const j of path.slice(0,-1))used.add(j);i=path[path.length-1];continue}
+  out.push(S.boundary[i]);i=(i+1)%n;if(i===0)break
+ }
+ return out.length>=3?out:S.boundary.map(p=>p.slice())
+}
 function ring(){let r=boundaryLatLngs().map(([a,b])=>[b,a]);if(r.length)r.push(r[0]);return r}
 function poly(){return ring().length>3?turf.polygon([ring()]):null}
 function area(){return poly()?turf.area(poly())/10000:0}
@@ -71,7 +102,7 @@ $('#createNew').onclick=newField;$('#fieldsHome').onclick=showFieldsHome;
 function newField(){open(`<h2>Create New Field</h2><label>Field name<input id="nm" placeholder="Field name"></label><button id="next" class="primary">Continue</button>`);$('#next').onclick=()=>{let n=$('#nm').value.trim();if(!n)return;S=emptyField(n);save();chooseMethod()}}
 function chooseMethod(){open(`<h2>${escapeHtml(S.name)}</h2><p>How do you want to create the field boundary?</p><div class="row"><button id="manual" class="primary">Manual</button><button id="gps">GPS</button></div>`);$('#manual').onclick=drawScreen;$('#gps').onclick=()=>alert('GPS boundary recording is not enabled yet.')}
 function setMapBar(html,title=''){drawer.classList.add('hidden');home.classList.add('hidden');mapBar.innerHTML=(title?`<span class="screen-title">${escapeHtml(title)}</span>`:'')+html;mapBar.classList.remove('hidden')}
-function drawScreen(){removeHandle();hidePointMenu();S.stage='draw';mode='draw';setMapBar(`<button id="backDraw">← Back</button><button id="undo">↶ Undo</button><span id="cnt">${S.boundary.length} pts</span><button id="lock" class="primary">Save</button>`,'Place Boundary Points');$('#backDraw').onclick=()=>S.boundary.length?showFieldsHome():chooseMethod();$('#undo').onclick=()=>{removeHandle();if(S.boundary.length)S.boundary.pop();redraw();drawScreen()};$('#lock').onclick=()=>{if(S.boundary.length<3)return alert('Add at least 3 points.');removeHandle();mode=null;S.stage='locked';sectionScreen()};redraw()}
+function drawScreen(){removeHandle();hidePointMenu();S.stage='draw';mode='draw';setMapBar(`<button id="backDraw">← Back</button><button id="undo">↶ Undo</button><span id="cnt">${S.boundary.length} pts</span><button id="lock" class="primary">Save</button>`,'Step 1 · Draw / Adjust Boundary');$('#backDraw').onclick=()=>S.boundary.length?showFieldsHome():chooseMethod();$('#undo').onclick=()=>{removeHandle();if(S.boundary.length)S.boundary.pop();redraw();drawScreen()};$('#lock').onclick=()=>{if(S.boundary.length<3)return alert('Add at least 3 points.');removeHandle();mode=null;S.stage='locked';sectionScreen()};redraw()}
 function nearestPointAt(latlng,pixels=32){let q=map.latLngToContainerPoint(latlng),best=-1,dist=Infinity;S.boundary.forEach((p,i)=>{let d=q.distanceTo(map.latLngToContainerPoint(p));if(d<dist){dist=d;best=i}});return dist<=pixels?best:-1}
 function nearestGuidePointAt(latlng,pixels=32){if(!guideDraft)return-1;let q=map.latLngToContainerPoint(latlng),best=-1,dist=Infinity;guideDraft.points.forEach((p,i)=>{let d=q.distanceTo(map.latLngToContainerPoint(p));if(d<dist){dist=d;best=i}});return dist<=pixels?best:-1}
 map.on('click',e=>{if(suppressNextMapTap){suppressNextMapTap=false;return}hidePointMenu();if(handle){removeHandle();redraw();return}if(guideHandle){removeGuideHandle();redraw();return}
@@ -80,15 +111,15 @@ map.on('click',e=>{if(suppressNextMapTap){suppressNextMapTap=false;return}hidePo
 });
 function pointClick(i,e){if(S.stage==='draw'){showDragHandle(i);return}if(S.stage!=='locked')return;if(op&&first>=0){if(first===i){cancelSectionChoice();return}applySection(first,i);return}first=i;showPointMenu(i,e)}
 function dragIcon(color='#173f2a'){return L.divIcon({className:'drag-handle-wrap',html:`<div class="drag-stem" style="background:${color}"></div><div class="drag-handle" style="background:${color}">↔<br>↕</div>`,iconSize:[76,76],iconAnchor:[12,12]})}
-function showDragHandle(i){removeHandle();selected=i;handle=L.marker(S.boundary[i],{icon:dragIcon(),draggable:true,zIndexOffset:1000,autoPan:true}).addTo(map);handle.on('dragstart',()=>suppressNextMapTap=true);handle.on('drag',ev=>{let q=ev.target.getLatLng();S.boundary[i]=[q.lat,q.lng];redraw();showDragHandle(i)});handle.on('dragend',()=>{save();removeHandle();redraw();setTimeout(()=>suppressNextMapTap=false,80)})}
+function showDragHandle(i){removeHandle();selected=i;handle=L.marker(S.boundary[i],{icon:dragIcon(),draggable:true,zIndexOffset:1000,autoPan:false}).addTo(map);handle.on('dragstart',()=>{suppressNextMapTap=true;map.dragging.disable()});handle.on('drag',ev=>{let q=ev.target.getLatLng();S.boundary[i]=[q.lat,q.lng];if(polyLayer)polyLayer.setLatLngs(boundaryLatLngs())});handle.on('dragend',()=>{if(!map.dragging.enabled())map.dragging.enable();save();removeHandle();redraw();setTimeout(()=>suppressNextMapTap=false,120)})}
 function removeHandle(){if(handle){map.removeLayer(handle);handle=null}selected=-1}
-function showGuideDragHandle(i){removeGuideHandle();guideHandle=L.marker(guideDraft.points[i],{icon:dragIcon('#8d42c7'),draggable:true,zIndexOffset:1100,autoPan:true}).addTo(map);guideHandle.on('dragstart',()=>suppressNextMapTap=true);guideHandle.on('drag',ev=>{let q=ev.target.getLatLng();guideDraft.points[i]=[q.lat,q.lng];redraw();showGuideDragHandle(i)});guideHandle.on('dragend',()=>{removeGuideHandle();redraw();setTimeout(()=>suppressNextMapTap=false,80)})}
+function showGuideDragHandle(i){removeGuideHandle();guideHandle=L.marker(guideDraft.points[i],{icon:dragIcon('#8d42c7'),draggable:true,zIndexOffset:1100,autoPan:false}).addTo(map);guideHandle.on('dragstart',()=>{suppressNextMapTap=true;map.dragging.disable()});guideHandle.on('drag',ev=>{let q=ev.target.getLatLng();guideDraft.points[i]=[q.lat,q.lng]});guideHandle.on('dragend',()=>{if(!map.dragging.enabled())map.dragging.enable();removeGuideHandle();redraw();setTimeout(()=>suppressNextMapTap=false,120)})}
 function removeGuideHandle(){if(guideHandle){map.removeLayer(guideHandle);guideHandle=null}}
 function showPointMenu(i){removeHandle();first=i;redraw();let pt=map.latLngToContainerPoint(S.boundary[i]);pointMenu.style.left=Math.max(8,Math.min(window.innerWidth-220,pt.x+16))+'px';pointMenu.style.top=Math.max(82,Math.min(window.innerHeight-170,pt.y-18))+'px';pointMenu.classList.remove('hidden')}
 function hidePointMenu(){pointMenu.classList.add('hidden')}
 pointMenu.querySelectorAll('[data-op]').forEach(b=>b.onclick=e=>{e.stopPropagation();op=b.dataset.op;hidePointMenu();redraw()});
 function cancelSectionChoice(){first=-1;op=null;hidePointMenu();redraw()}
-function sectionScreen(){removeHandle();hidePointMenu();S.stage='locked';mode=null;setMapBar(`<button id="backPoints">← Back</button><button id="undoEdit">↶ Undo</button><button id="saveField" class="primary">Save</button>`,'Edit Border Sections');$('#backPoints').onclick=()=>{first=-1;op=null;drawScreen()};$('#undoEdit').onclick=undoEdit;$('#saveField').onclick=()=>{S.stage='saved';first=-1;op=null;hidePointMenu();mapBar.classList.add('hidden');redraw();editFieldScreen()};redraw()}
+function sectionScreen(){removeHandle();hidePointMenu();S.stage='locked';mode=null;setMapBar(`<button id="backPoints">← Back</button><button id="undoEdit">↶ Undo</button><button id="saveField" class="primary">Save</button>`,'Step 2 · Name / Smooth Borders');$('#backPoints').onclick=()=>{first=-1;op=null;drawScreen()};$('#undoEdit').onclick=undoEdit;$('#saveField').onclick=()=>{S.stage='saved';first=-1;op=null;hidePointMenu();mapBar.classList.add('hidden');redraw();editFieldScreen()};redraw()}
 function snapshotEdit(){editHistory.push({boundary:S.boundary.map(p=>p.slice()),sections:S.sections.map(s=>({...s}))});if(editHistory.length>30)editHistory.shift()}
 function undoEdit(){let h=editHistory.pop();if(!h)return;S.boundary=h.boundary;S.sections=h.sections;first=-1;op=null;redraw();sectionScreen()}
 function applySection(a,b){if(!op)return;let path=idxs(a,b);snapshotEdit();if(op==='name'){let n=prompt('Border name');if(!n){editHistory.pop();cancelSectionChoice();return}let key=path.join(','),old=S.sections.find(s=>idxs(s.start,s.end).join(',')===key);if(old)old.name=n;else S.sections.push({start:path[0],end:path[path.length-1],name:n,smooth:false})}else if(op==='straight'){let p0=S.boundary[path[0]],p1=S.boundary[path[path.length-1]],n=path.length-1;for(let k=1;k<n;k++){let t=k/n;S.boundary[path[k]]=[p0[0]+(p1[0]-p0[0])*t,p0[1]+(p1[1]-p0[1])*t]}}else if(op==='smooth'){let key=path.join(','),s=S.sections.find(x=>idxs(x.start,x.end).join(',')===key);if(!s){s={start:path[0],end:path[path.length-1],name:'',smooth:true};S.sections.push(s)}s.smooth=true}first=-1;op=null;redraw();sectionScreen()}
@@ -108,7 +139,13 @@ function guidanceMenu(){let additional=mainSets().length>0;open(`<h3>${additiona
 function borderList(additional=false){let named=S.sections.map((s,i)=>({s,i})).filter(o=>o.s.name);if(!named.length)return alert('Name at least one border section first.');open(`<h3>Create from Border</h3><p>Tap a border to highlight it, then use Select Highlighted Border.</p><div class="section-list">${named.map(o=>`<button data-i="${o.i}">${escapeHtml(o.s.name)}</button>`).join('')}</div><button id="useBorder" class="primary" disabled>Select Highlighted Border</button><button id="back">Back</button>`);let chosen=null;document.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{chosen=+b.dataset.i;if(highlightLayer)map.removeLayer(highlightLayer);highlightLayer=L.polyline(sectionLatLngs(S.sections[chosen]),{color:'#ff2d55',weight:8,opacity:.85,interactive:false}).addTo(map);document.querySelectorAll('[data-i]').forEach(x=>x.classList.remove('selected'));b.classList.add('selected');$('#useBorder').disabled=false});$('#useBorder').onclick=()=>{if(chosen==null)return;S._border=chosen;if(highlightLayer){map.removeLayer(highlightLayer);highlightLayer=null}guidanceOptions('border',additional)};$('#back').onclick=guidanceMenu}
 function startGuideDraft(type,additional=false){guideDraft=guideDraft&&guideDraft.type===type?guideDraft:{type,points:[],additional};guideDraft.additional=additional;mode='guide-draw';close();S.stage='saved';updateGuideBar();redraw()}
 function updateGuideBar(){if(!guideDraft)return;let need=guideDraft.type==='ab'?2:2,ready=guideDraft.points.length>=need;setMapBar(`<button id="cancelGuide">← Back</button><button id="undoGuide">↶ Undo</button><span id="guideCount">${guideDraft.points.length} pts</span><button id="saveGuide" class="primary" ${ready?'':'disabled'}>Save</button>`,guideDraft.type==='ab'?'Place AB Points':'Place Curve Points');$('#cancelGuide').onclick=()=>{guideDraft=null;mode=null;redraw();guidanceMenu()};$('#undoGuide').onclick=()=>{removeGuideHandle();guideDraft.points.pop();redraw();updateGuideBar()};$('#saveGuide').onclick=()=>{if(!ready)return;let type=guideDraft.type,additional=guideDraft.additional;mode=null;removeGuideHandle();guidanceOptions(type,additional)}}
-function guidanceOptions(source,additional=false){let label=source==='ab'?'A-B reference':source==='curve'?'Curved reference':'From '+S.sections[S._border].name;let extra=additional?`<label>Additional coverage<select id="coverage"><option value="remaining">Fill Remaining Space</option><option value="left">Quantity - Left</option><option value="right">Quantity - Right</option><option value="both">Quantity - Left & Right</option></select></label><div id="qtyBox" class="hidden"><label>Left quantity<input id="leftQty" type="number" min="0" value="3"></label><label>Right quantity<input id="rightQty" type="number" min="0" value="3"></label></div>`:`<label>Coverage<select id="coverage"><option value="fill">Fill Entire Field</option><option value="count">Set Number of Lines</option></select></label><label id="countLab" class="hidden">Number of lines<input id="gc" type="number" min="1" value="10"></label>`;open(`<h3>${additional?'Additional Guidance Settings':'Guidance Settings'}</h3><p>${escapeHtml(label)}</p><label>Guidance set name<input id="gn" value="${additional?'Additional rows':source==='border'?escapeHtml(S.sections[S._border].name)+' rows':'Main rows'}"></label><label>Implement width (m)<input id="gw" type="number" step="0.01" value="${S.width||9}"></label>${extra}<button id="preview" class="primary">Preview Guidance</button><button id="back">Back</button>`);if(additional){$('#coverage').onchange=()=>{$('#qtyBox').classList.toggle('hidden',$('#coverage').value==='remaining')}}else $('#coverage').onchange=()=>$('#countLab').classList.toggle('hidden',$('#coverage').value!=='count');$('#preview').onclick=()=>generateGuidance(source,additional);$('#back').onclick=()=>{if(source==='ab'||source==='curve'){startGuideDraft(source,additional)}else guidanceMenu()}}
+function guidanceOptions(source,additional=false){
+ let label=source==='ab'?'A-B reference':source==='curve'?'Curved reference':'From '+S.sections[S._border].name;
+ let extra=additional?`<label>Coverage<select id="coverage"><option value="remaining">Fill Remaining Space</option><option value="count">Set Left / Right Quantities</option></select></label><div id="qtyBox" class="hidden"><div class="row"><label>Left quantity<input id="leftQty" type="number" min="0" placeholder="0"></label><label>Right quantity<input id="rightQty" type="number" min="0" placeholder="0"></label></div><div class="muted">Leave a side blank for no lines on that side. The reference line itself is included when it fits.</div></div>`:`<label>Coverage<select id="coverage"><option value="fill">Fill Entire Field</option><option value="count">Set Number of Lines</option></select></label><label id="countLab" class="hidden">Number of lines<input id="gc" type="number" min="1" value="10"></label>`;
+ open(`<h3>${additional?'Additional Guidance Settings':'Guidance Settings'}</h3><p>${escapeHtml(label)}</p><label>Guidance set name<input id="gn" value="${additional?'Additional rows':source==='border'?escapeHtml(S.sections[S._border].name)+' rows':'Main rows'}"></label><label>Implement width (m)<input id="gw" type="number" step="0.01" value="${S.width||9}"></label>${extra}<button id="preview" class="primary">Preview Guidance</button><button id="back">Back</button>`);
+ if(additional)$('#coverage').onchange=()=>$('#qtyBox').classList.toggle('hidden',$('#coverage').value!=='count');else $('#coverage').onchange=()=>$('#countLab').classList.toggle('hidden',$('#coverage').value!=='count');
+ $('#preview').onclick=()=>generateGuidance(source,additional);$('#back').onclick=()=>{if(source==='ab'||source==='curve')startGuideDraft(source,additional);else guidanceMenu()}
+}
 function usablePoly(){let p=poly();if(S.borderPasses>0){let b=turf.buffer(p,-S.borderPasses*S.width/1000,{units:'kilometers'});if(b&&b.geometry.type==='Polygon')return b}return p}
 function clipLine(line,p){let out=[];try{let split=turf.lineSplit(line,turf.polygonToLine(p));for(const f of split.features){let mid=turf.along(f,turf.length(f)/2);if(turf.booleanPointInPolygon(mid,p))out.push(f)}}catch{}return out}
 function existingMainLines(){return mainSets().flatMap(s=>s.lines)}
@@ -116,46 +153,51 @@ function farFromExisting(line,width){let ex=existingMainLines();if(!ex.length)re
 function existingCoverage(width){let ex=existingMainLines();if(!ex.length)return null;try{let buffs=ex.map(g=>turf.buffer(turf.lineString(g.map(([y,x])=>[x,y])),width*.48,{units:'meters'})).filter(Boolean);if(!buffs.length)return null;if(buffs.length===1)return buffs[0];return turf.union(turf.featureCollection(buffs))}catch(e){console.warn('Could not build existing coverage mask',e);return null}}
 function trimLineOutsideCoverage(line,coverage){if(!coverage)return[line];try{let boundary=turf.polygonToLine(coverage),parts=[line],cutters=boundary.type==='FeatureCollection'?boundary.features:[boundary];for(const cutter of cutters){let next=[];for(const part of parts){let split=turf.lineSplit(part,cutter);next.push(...split.features)}parts=next}return parts.filter(f=>{let len=turf.length(f,{units:'meters'});if(len<1)return false;let mid=turf.along(f,len/2,{units:'meters'});return !turf.booleanPointInPolygon(mid,coverage)})}catch(e){console.warn('Could not trim against existing guidance',e);return[line]}}
 function baseReference(source){if(source==='border'){let s=S.sections[S._border];return turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]))}let pts=guideDraft?.points||[];if(source==='curve')return turf.lineString(smoothLatLngs(pts).map(([y,x])=>[x,y]));return turf.lineString(pts.map(([y,x])=>[x,y]))}
-function generateGuidance(source,additional=false){let width=+$('#gw').value||9,name=$('#gn').value.trim()||'Guidance',p=usablePoly(),lines=[],coverage=$('#coverage').value,base=baseReference(source),max=999,left=999,right=999,coverageMask=null;if(!additional&&coverage==='count')max=Math.max(1,+$('#gc').value||1);if(additional&&coverage!=='remaining'){left=coverage==='right'?0:Math.max(0,+$('#leftQty')?.value||0);right=coverage==='left'?0:Math.max(0,+$('#rightQty')?.value||0);max=left+right}if(additional&&coverage==='remaining')coverageMask=existingCoverage(width)
- let offsets=[];if(source==='border'){let start=(S.borderPasses+.5)*width;for(let i=0;i<1000;i++)offsets.push(start+i*width)}else{if(!additional)offsets.push(0);for(let i=1;i<1000;i++){if(additional&&coverage!=='remaining'){if(i<=left)offsets.push(-i*width);if(i<=right)offsets.push(i*width);if(i>=Math.max(left,right))break}else offsets.push(i*width,-i*width)}}
- for(const off of offsets){if(lines.length>=max)break;let candidates=[];if(source==='ab'){let coords=base.geometry.coordinates,a=turf.point(coords[0]),b=turf.point(coords[coords.length-1]),bearing=turf.bearing(a,b),mid=turf.midpoint(a,b),box=turf.bbox(p),diag=turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'}),c=turf.destination(mid,off,bearing+90,{units:'meters'}),x=turf.destination(c,diag*2,bearing+180,{units:'meters'}),y=turf.destination(c,diag*2,bearing,{units:'meters'});candidates=clipLine(turf.lineString([x.geometry.coordinates,y.geometry.coordinates]),p)}else{let signs=source==='border'?[1,-1]:[1];for(const sign of signs){let ref=Math.abs(off)<.001?base:turf.lineOffset(base,sign*off,{units:'meters'}),parts=clipLine(ref,p);if(parts.length){candidates=parts;break}}}
-  let finalCandidates=candidates;if(additional&&coverage==='remaining'&&coverageMask)finalCandidates=candidates.flatMap(f=>trimLineOutsideCoverage(f,coverageMask));for(const f of finalCandidates){let ll=f.geometry.coordinates.map(([x,y])=>[y,x]);if(additional&&coverage==='remaining'&&!farFromExisting(ll,width))continue;lines.push(ll);if(lines.length>=max)break}
+function generateGuidance(source,additional=false){
+ let width=+$('#gw').value||9,name=$('#gn').value.trim()||'Guidance',p=usablePoly(),lines=[],coverage=$('#coverage').value,base=baseReference(source);
+ let existing=existingMainLines(),mask=existing.length?existingCoverage(width):null;
+ let requested=!additional&&coverage==='count'?Math.max(1,+$('#gc').value||1):Infinity;
+ let left=additional&&coverage==='count'?Math.max(0,+($('#leftQty')?.value||0)):Infinity;
+ let right=additional&&coverage==='count'?Math.max(0,+($('#rightQty')?.value||0)):Infinity;
+ let offsets=[];
+ if(source==='border'){
+  let start=(S.borderPasses+.5)*width,limit=additional&&coverage==='count'?Math.max(left,right,1):1000;
+  for(let i=0;i<limit;i++)offsets.push(start+i*width);
+ }else{
+  offsets.push(0); // always try the actual AB/curve reference as the center guidance line
+  if(additional&&coverage==='count'){
+   for(let i=1;i<=Math.max(left,right);i++){if(i<=left)offsets.push(-i*width);if(i<=right)offsets.push(i*width)}
+  }else for(let i=1;i<1000;i++)offsets.push(i*width,-i*width)
  }
- S.width=width;let referencePoints=source==='border'?null:(guideDraft?.points||[]).map(p=>p.slice());S.guidanceSets.push({name,kind:'main',source,lines,borderIndex:source==='border'?S._border:null,referencePoints});guideDraft=null;redraw();open(`<h3>Guidance Preview</h3><div class="status">${escapeHtml(name)}<br>${lines.length} guidance lines • ${width.toFixed(2)} m</div><div class="row"><button id="keep" class="primary">Save Guidance</button><button id="remove">Discard</button></div>`);$('#keep').onclick=editFieldScreen;$('#remove').onclick=()=>{S.guidanceSets.pop();redraw();guidanceMenu()}}
+ let acceptedLevels=0;
+ for(const off of offsets){
+  if(!additional&&coverage==='count'&&acceptedLevels>=requested)break;
+  let candidates=[];
+  if(source==='ab'){
+   let coords=base.geometry.coordinates,a=turf.point(coords[0]),b=turf.point(coords[coords.length-1]),bearing=turf.bearing(a,b),mid=turf.midpoint(a,b),box=turf.bbox(p),diag=turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'}),c=turf.destination(mid,off,bearing+90,{units:'meters'}),x=turf.destination(c,diag*2,bearing+180,{units:'meters'}),y=turf.destination(c,diag*2,bearing,{units:'meters'});candidates=clipLine(turf.lineString([x.geometry.coordinates,y.geometry.coordinates]),p)
+  }else{
+   let tries=source==='border'?[1,-1]:[1];
+   for(const sign of tries){let ref=Math.abs(off)<.001?base:turf.lineOffset(base,sign*off,{units:'meters'}),parts=clipLine(ref,p);if(parts.length){candidates=parts;break}}
+  }
+  // Existing guidance is a hard obstacle. Split every candidate and retain every usable remainder.
+  let finalCandidates=mask?candidates.flatMap(f=>trimLineOutsideCoverage(f,mask)):candidates;
+  finalCandidates=finalCandidates.filter(f=>turf.length(f,{units:'meters'})>=Math.max(2,width*.35));
+  if(!finalCandidates.length)continue;
+  // Keep all clipped pieces at this offset; this fills wedges/triangles instead of stopping when one end collides.
+  for(const f of finalCandidates)lines.push(f.geometry.coordinates.map(([x,y])=>[y,x]));
+  acceptedLevels++;
+  if(!additional&&coverage==='count'&&acceptedLevels>=requested)break;
+  // Fill Remaining keeps walking outward even after near-end collisions; safety cap is offsets[] length.
+ }
+ S.width=width;let referencePoints=source==='border'?null:(guideDraft?.points||[]).map(p=>p.slice());
+ S.guidanceSets.push({name,kind:'main',source,lines,borderIndex:source==='border'?S._border:null,referencePoints});guideDraft=null;redraw();
+ open(`<h3>Guidance Preview</h3><div class="status">${escapeHtml(name)}<br>${lines.length} guidance lines • ${width.toFixed(2)} m</div><div class="row"><button id="keep" class="primary">Save Guidance</button><button id="remove">Discard</button></div>`);$('#keep').onclick=editFieldScreen;$('#remove').onclick=()=>{S.guidanceSets.pop();redraw();guidanceMenu()}
+}
 
-function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="geo" class="primary">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><button id="back">Back</button>`);$('#geo').onclick=()=>dl(new Blob([JSON.stringify(fc(),null,2)],{type:'application/json'}),safe(S.name)+'.geojson');$('#shp').onclick=downloadShapefile;$('#back').onclick=editFieldScreen}
+function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="geo" class="primary">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><button id="back">Back</button>`);$('#geo').onclick=()=>dl(new Blob([JSON.stringify(fc(),null,2)],{type:'application/json'}),safe(S.name)+'.geojson');$('#shp').onclick=()=>shpwrite.download(fc(),{folder:safe(S.name),types:{polygon:'boundary',line:'lines',point:'points'}});$('#back').onclick=editFieldScreen}
 function fc(){let f=[turf.polygon([ring()],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
 function safe(s){return(s||'field').replace(/[^a-z0-9_-]+/gi,'_')}
-async function downloadShapefile(){
-  const btn=$('#shp');
-  const oldText=btn.textContent;
-  try{
-    btn.disabled=true; btn.textContent='Preparing ZIP…';
-    const options={folder:safe(S.name),types:{polygon:'boundary',line:'lines',point:'points'}};
-    const out=await Promise.resolve(shpwrite.zip(fc(),options));
-    let blob;
-    if(out instanceof Blob) blob=out;
-    else if(out instanceof ArrayBuffer) blob=new Blob([out],{type:'application/zip'});
-    else if(ArrayBuffer.isView(out)) blob=new Blob([out.buffer],{type:'application/zip'});
-    else if(typeof out==='string'){
-      const base64=out.includes(',')?out.split(',').pop():out;
-      const bin=atob(base64), bytes=new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-      blob=new Blob([bytes],{type:'application/zip'});
-    } else throw new Error('Shapefile library returned an unsupported ZIP format.');
-    dl(blob,safe(S.name)+'-isoview.zip');
-  }catch(err){
-    console.error('Shapefile export failed:',err);
-    alert('Could not create the Shapefile ZIP. '+(err?.message||err));
-  }finally{btn.disabled=false;btn.textContent=oldText}
-}
-function dl(blob,n){
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url; a.download=n; a.style.display='none';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),60000);
-}
+function dl(blob,n){let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=n;a.click()}
 function showFieldsHome(){removeHandle();removeGuideHandle();guideDraft=null;hidePointMenu();mode=null;mapBar.classList.add('hidden');home.classList.add('hidden');let cards=DB.fields.map(f=>{let old=S;S=f;let a=area().toFixed(2);S=old;return `<div class="field-card"><div><b>${escapeHtml(f.name)}</b><small>${a} ha</small></div><div class="field-card-actions"><button data-view="${f.id}" class="primary">View</button><button data-menu="${f.id}">⋮</button></div></div>`}).join('');open(`<div class="fields-head"><h2>My Fields</h2><button id="newFromList" class="primary">+ New Field</button></div>${!localStorage.getItem('flbGoogleMapsKey')?'<button id="setupGoogleHome" class="primary">Enable Google Satellite</button>':''}${cards||'<p>No fields saved yet. Create your first field.</p>'}`);$('#newFromList').onclick=newField;if($('#setupGoogleHome'))$('#setupGoogleHome').onclick=googleMapSetup;document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>openField(+b.dataset.view));document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>fieldItemMenu(+b.dataset.menu));redraw()}
 function openField(id){let f=DB.fields.find(x=>x.id===id);if(!f)return;S=f;DB.currentId=id;save();if(S.boundary.length)map.fitBounds(L.latLngBounds(S.boundary),{padding:[45,45],maxZoom:19});viewFieldScreen()}
 function fieldItemMenu(id){let f=DB.fields.find(x=>x.id===id);if(!f)return;open(`<h3>${escapeHtml(f.name)}</h3><button id="deleteField" class="danger">Delete Field</button><button id="back">Back</button>`);$('#deleteField').onclick=()=>{if(confirm(`Delete ${f.name}? This cannot be undone.`)){DB.fields=DB.fields.filter(x=>x.id!==id);if(DB.currentId===id)DB.currentId=null;localStorage.setItem('flbFields',JSON.stringify(DB));S=emptyField();redraw();showFieldsHome()}};$('#back').onclick=showFieldsHome}
