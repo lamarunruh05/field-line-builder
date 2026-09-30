@@ -8,9 +8,10 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@mapbox/shp-write": "^0.4.3",
     "@turf/turf": "^7.4.0",
+    "jszip": "^3.10.1",
     "leaflet": "^1.9.4",
-    "vite": "^7.3.6",
-    "@mapbox/shp-write": "^0.4.3"
+    "vite": "^7.3.6"
   }
 }

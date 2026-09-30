@@ -2,6 +2,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as turf from '@turf/turf';
 import shpwrite from '@mapbox/shp-write';
+import JSZip from 'jszip';
 import './style.css';
 
 // GoogleMutant is a classic Leaflet plugin and expects Leaflet on window.
@@ -326,25 +327,48 @@ function densifyIsoViewLine(latlngs,maxMeters=3){
  if(!prev||prev[0]!==last[0]||prev[1]!==last[1])out.push(last);
  return out
 }
-function isoViewGuideFC(){
- let features=[];
+function isoViewGuideEntries(){
+ let entries=[];
  mainSets().forEach((set,setIndex)=>set.lines.forEach((g,lineIndex)=>{
   let coords=densifyIsoViewLine(g,3);
-  if(coords.length>=2)features.push(turf.lineString(coords,{GUIDE:setIndex+1,LINE:lineIndex+1,NAME:String(set.name||('Guide '+(setIndex+1))).slice(0,40)}))
+  if(coords.length<2)return;
+  let setNo=String(setIndex+1).padStart(2,'0'),lineNo=String(lineIndex+1).padStart(3,'0');
+  let base=((safe(S.name)||'FIELD').slice(0,22)+'_G'+setNo+'_L'+lineNo).slice(0,36);
+  entries.push({base,setIndex,lineIndex,fc:turf.featureCollection([
+   turf.lineString(coords,{GUIDE:setIndex+1,LINE:lineIndex+1,NAME:String(set.name||('Guide '+(setIndex+1))).slice(0,40)})
+  ])});
  }));
- return turf.featureCollection(features)
+ return entries
 }
 async function exportIsoViewGuideMap(){
- let b=$('#isoGuide'),st=$('#exportStatus'),guides=isoViewGuideFC();
- if(!guides.features.length){st.textContent='Create and save guidance lines first.';return}
+ let b=$('#isoGuide'),st=$('#exportStatus'),entries=isoViewGuideEntries();
+ if(!entries.length){st.textContent='Create and save guidance lines first.';return}
  try{
-  b.disabled=true;st.textContent='Building IsoView guide map…';
-  let base=(safe(S.name)||'ISOVIEW_GUIDES').slice(0,36)+'_GUIDES';
-  let data=await shpwrite.zip(guides,{folder:base,outputType:'blob',types:{polyline:base}});
-  let blob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});
+  b.disabled=true;st.textContent='Building IsoView guide-map package…';
+  // IsoView previewed only the first feature when several guidance rows were
+  // stored in one SHP. Package every actual guidance row as its own complete
+  // SHP/SHX/DBF/PRJ set, while keeping them all in ONE download ZIP. On the
+  // monitor use Guide Maps > Import - Pen drive > Import all.
+  let out=new JSZip();
+  for(let i=0;i<entries.length;i++){
+   let e=entries[i];
+   st.textContent=`Building IsoView guide ${i+1} of ${entries.length}…`;
+   let one=await shpwrite.zip(e.fc,{folder:e.base,outputType:'blob',types:{polyline:e.base}});
+   let oneBlob=one instanceof Blob?one:new Blob([one],{type:'application/zip'});
+   let z=await JSZip.loadAsync(await oneBlob.arrayBuffer());
+   for(let name of Object.keys(z.files)){
+    let f=z.files[name]; if(f.dir)continue;
+    let leaf=name.split('/').pop();
+    if(!leaf)continue;
+    out.file(leaf,await f.async('uint8array'));
+   }
+  }
+  out.file('README.txt',`IsoView Guide Map package\r\nField: ${S.name||''}\r\nGuidance maps: ${entries.length}\r\n\r\nExtract all files together to the USB drive.\r\nOn IsoView: Settings > Memory > Input Maps > Guide Maps > Import - Pen drive > Import all.\r\nEach Gxx_Lxxx name is one independently importable guidance row.\r\n`);
+  let blob=await out.generateAsync({type:'blob',compression:'DEFLATE'});
+  let base=(safe(S.name)||'ISOVIEW_GUIDES').slice(0,28)+'_ISOVIEW_GUIDES';
   downloadBlob(blob,base+'.zip');
-  st.textContent='IsoView guide ZIP ready. Extract it to the USB drive; import the SHP under Settings > Memory > Input Maps > Guide Maps.'
- }catch(e){console.error(e);st.textContent='Could not create IsoView guide map: '+(e?.message||e)}finally{b.disabled=false}
+  st.textContent=`IsoView package ready: ${entries.length} separate guide map${entries.length===1?'':'s'} in one ZIP. Extract all files to the USB, then use Guide Maps > Import - Pen drive > Import all.`
+ }catch(e){console.error(e);st.textContent='Could not create IsoView guide maps: '+(e?.message||e)}finally{b.disabled=false}
 }
 function fc(){let f=[turf.polygon([ring(true)],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
 function safe(s){return(s||'field').replace(/[^a-z0-9_-]+/gi,'_')}
