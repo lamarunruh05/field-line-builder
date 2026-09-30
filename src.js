@@ -168,7 +168,35 @@ function clipLine(line,p){
 function existingMainLines(){return mainSets().flatMap(s=>s.lines)}
 function existingCoverage(width){let ex=existingMainLines();if(!ex.length)return null;try{let buffs=ex.map(g=>turf.buffer(turf.lineString(g.map(([y,x])=>[x,y])),width*.995,{units:'meters'})).filter(Boolean);return buffs.length===1?buffs[0]:turf.union(turf.featureCollection(buffs))}catch(e){console.warn('coverage mask failed',e);return null}}
 function splitOutsideCoverage(line,coverage){if(!coverage)return[line];let parts=[line];try{for(const cutter of polygonBoundaries(coverage)){let next=[];for(const part of parts){let sp=turf.lineSplit(part,cutter);next.push(...(sp.features.length?sp.features:[part]))}parts=next}}catch(e){console.warn('coverage split failed',e)}return parts.filter(f=>{let len=turf.length(f,{units:'meters'});if(len<.75)return false;let mid=turf.along(f,len/2,{units:'meters'});return !turf.booleanPointInPolygon(mid,coverage)})}
-function baseReference(source){if(source==='border'){let sec=S.sections[S._border];return turf.lineString(sectionLatLngs(sec).map(([y,x])=>[x,y]))}let pts=guideDraft?.points||[];if(source==='curve')return turf.lineString(smoothLatLngs(pts).map(([y,x])=>[x,y]));return turf.lineString(pts.map(([y,x])=>[x,y]))}
+function nearestCoordIndex(coords,pt){
+ let best=0,bd=Infinity,p=turf.point(pt);
+ for(let i=0;i<coords.length-1;i++){let d=turf.distance(p,turf.point(coords[i]),{units:'meters'});if(d<bd){bd=d;best=i}}
+ return best
+}
+function ringArc(coords,a,b,forward=true){
+ let n=coords.length-1,out=[],i=a,guard=0;out.push(coords[i]);
+ while(i!==b&&guard++<=n+1){i=forward?(i+1)%n:(i-1+n)%n;out.push(coords[i])}
+ return out
+}
+function avgDistanceToLine(coords,line){
+ if(!coords.length)return Infinity;let step=Math.max(1,Math.floor(coords.length/12)),sum=0,n=0;
+ for(let i=0;i<coords.length;i+=step){sum+=turf.pointToLineDistance(turf.point(coords[i]),line,{units:'meters'});n++}
+ return n?sum/n:Infinity
+}
+function innerBorderReference(){
+ // Create-from-border uses the matching section of the INNERMOST border-pass limit,
+ // not the original outside field edge. This makes the proven headland geometry the
+ // exact reference from which main rows start.
+ let sec=S.sections[S._border],named=turf.lineString(sectionLatLngs(sec).map(([y,x])=>[x,y])),p=usablePoly();
+ if(!p)return named;
+ let coords=p.geometry.type==='Polygon'?p.geometry.coordinates[0]:p.geometry.coordinates[0][0];
+ if(!coords||coords.length<4)return named;
+ let nc=named.geometry.coordinates,a=nearestCoordIndex(coords,nc[0]),b=nearestCoordIndex(coords,nc[nc.length-1]);
+ let one=ringArc(coords,a,b,true),two=ringArc(coords,a,b,false);
+ let chosen=avgDistanceToLine(one,named)<=avgDistanceToLine(two,named)?one:two;
+ return turf.lineString(chosen)
+}
+function baseReference(source){if(source==='border')return innerBorderReference();let pts=guideDraft?.points||[];if(source==='curve')return turf.lineString(smoothLatLngs(pts).map(([y,x])=>[x,y]));return turf.lineString(pts.map(([y,x])=>[x,y]))}
 function lineMid(f){let len=turf.length(f,{units:'meters'});return turf.along(f,len/2,{units:'meters'})}
 function distanceToReference(f,base){try{return turf.pointToLineDistance(lineMid(f),base,{units:'meters'})}catch{return Infinity}}
 function longestNearReference(parts,base,targetOffset,width,keepAll=false){
@@ -270,8 +298,9 @@ function generateGuidance(source,additional=false){
  let right=additional&&coverage==='count'?Math.max(0,+($('#rightQty')?.value||0)):Infinity;
  let offsets=[];
  if(source==='border'){
-  let start=(S.borderPasses+.5)*width,side=chooseBorderSide(base,p,start);
+  let start=.5*width,side=chooseBorderSide(base,p,start);
   if(!side)return alert('No guidance lines could be created from this reference.');
+  // base is already the innermost border-pass limit, so the first row centre is exactly half an implement width inside it.
   // Once the inward side is known, every row advances farther into the field.
   // Never alternate sides: an outward curved offset can re-enter elsewhere and
   // was the cause of rows appearing in the middle or in disconnected wedges.
