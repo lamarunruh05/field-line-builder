@@ -10,7 +10,7 @@
   "dependencies": {
     "@turf/turf": "^7.4.0",
     "leaflet": "^1.9.4",
-    "shp-write": "^0.3.2",
-    "vite": "^7.3.6"
+    "vite": "^7.3.6",
+    "@mapbox/shp-write": "^0.4.3"
   }
 }

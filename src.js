@@ -1,7 +1,7 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as turf from '@turf/turf';
-import shpwrite from 'shp-write';
+import shpwrite from '@mapbox/shp-write';
 import './style.css';
 
 // GoogleMutant is a classic Leaflet plugin and expects Leaflet on window.
@@ -314,7 +314,7 @@ function generateGuidance(source,additional=false){
  open(`<h3>Guidance Preview</h3><div class="status">${escapeHtml(name)}<br>${lines.length} guidance lines • ${width.toFixed(2)} m</div><div class="row"><button id="keep" class="primary">Save Guidance</button><button id="remove">Discard</button></div>`);$('#keep').onclick=editFieldScreen;$('#remove').onclick=()=>{S.guidanceSets.pop();redraw();guidanceMenu()}
 }
 
-function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="geo" class="primary">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><div id="exportStatus" class="muted"></div><button id="back">Back</button>`);$('#geo').onclick=()=>downloadBlob(new Blob([JSON.stringify(fc(),null,2)],{type:'application/geo+json'}),safe(S.name)+'.geojson');$('#shp').onclick=async()=>{let b=$('#shp'),st=$('#exportStatus');try{b.disabled=true;st.textContent='Building ZIP…';let data=await shpwrite.zip(fc(),{folder:safe(S.name),types:{polygon:'boundary',line:'lines',point:'points'}});let blob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});downloadBlob(blob,safe(S.name)+'.zip');st.textContent='ZIP ready. Check your Downloads folder.'}catch(e){console.error(e);st.textContent='Could not create ZIP: '+(e?.message||e)}finally{b.disabled=false}};$('#back').onclick=editFieldScreen}
+function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="geo" class="primary">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><div id="exportStatus" class="muted"></div><button id="back">Back</button>`);$('#geo').onclick=()=>downloadBlob(new Blob([JSON.stringify(fc(),null,2)],{type:'application/geo+json'}),safe(S.name)+'.geojson');$('#shp').onclick=async()=>{let b=$('#shp'),st=$('#exportStatus');try{b.disabled=true;st.textContent='Building ZIP…';let data=await shpwrite.zip(fc(),{folder:safe(S.name),outputType:'blob',types:{polygon:'boundary',polyline:'lines',point:'points'}});let blob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});downloadBlob(blob,safe(S.name)+'.zip');st.textContent='ZIP ready. Check your Downloads folder.'}catch(e){console.error(e);st.textContent='Could not create ZIP: '+(e?.message||e)}finally{b.disabled=false}};$('#back').onclick=editFieldScreen}
 function fc(){let f=[turf.polygon([ring(true)],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
 function safe(s){return(s||'field').replace(/[^a-z0-9_-]+/gi,'_')}
 function downloadBlob(blob,n){let url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=n;a.style.display='none';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(url);a.remove()},3000)}
