@@ -255,6 +255,20 @@ function chooseBorderSide(base,p,start){
  if(!lp&&!lm)return 0;
  return lp>=lm?1:-1;
 }
+function fieldSweepSteps(p,width){
+ // Sweep far enough to cross the ENTIRE working polygon.  Do not stop after a
+ // run of empty offsets: a concave/curved field can disappear and then re-enter
+ // the same family of parallel guidance lines farther away.
+ let box=turf.bbox(p);
+ let diag=turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'});
+ return Math.max(8,Math.ceil(diag/Math.max(width,.1))+12);
+}
+function usableCandidateParts(parts,width){
+ // One infinite/offset guidance row may cross a concave working polygon more
+ // than once. Every clipped piece is a real part of that same row and must be
+ // retained; choosing only the longest piece creates blank bands and triangles.
+ return parts.filter(f=>turf.length(f,{units:'meters'})>=Math.max(.75,width*.12));
+}
 function generateGuidance(source,additional=false){
  let width=+$('#gw').value||9,name=$('#gn').value.trim()||'Guidance',p=usablePoly(),lines=[],coverage=$('#coverage').value,base=baseReference(source);
  if(!p||!base||turf.length(base,{units:'meters'})<1)return alert('The reference line is too short.');
@@ -262,28 +276,35 @@ function generateGuidance(source,additional=false){
  let requested=!additional&&coverage==='count'?Math.max(1,+$('#gc').value||1):Infinity;
  let left=additional&&coverage==='count'?Math.max(0,+($('#leftQty')?.value||0)):Infinity;
  let right=additional&&coverage==='count'?Math.max(0,+($('#rightQty')?.value||0)):Infinity;
- let offsets=[];
+ let offsets=[],sweep=fieldSweepSteps(p,width);
  if(source==='border'){
   let start=(S.borderPasses+.5)*width,side=chooseBorderSide(base,p,start);
   if(!side)return alert('No guidance lines could be created from this reference.');
-  // Once the inward side is known, every row advances farther into the field.
-  // Never alternate sides: an outward curved offset can re-enter elsewhere and
-  // was the cause of rows appearing in the middle or in disconnected wedges.
-  let maxRows=additional&&coverage==='count'?Math.max(left,right):1000;
+  let maxRows=additional&&coverage==='count'?Math.max(left,right):(!additional&&coverage==='count'?requested:sweep);
   for(let i=0;i<maxRows;i++)offsets.push(side*(start+i*width));
  }else{
   offsets.push(0);
-  if(additional&&coverage==='count'){for(let i=1;i<=Math.max(left,right);i++){if(i<=left)offsets.push(-i*width);if(i<=right)offsets.push(i*width)}}
-  else for(let i=1;i<1000;i++)offsets.push(i*width,-i*width)
+  if(additional&&coverage==='count'){
+   for(let i=1;i<=Math.max(left,right);i++){if(i<=left)offsets.push(-i*width);if(i<=right)offsets.push(i*width)}
+  }else if(!additional&&coverage==='count'){
+   // Count valid swath positions, alternating around the reference as before.
+   for(let i=1;i<=sweep;i++)offsets.push(i*width,-i*width);
+  }else{
+   // Fill the complete field on BOTH sides of AB/curve.  Sweep all the way
+   // across the polygon instead of stopping after an arbitrary empty run.
+   for(let i=1;i<=sweep;i++)offsets.push(i*width,-i*width);
+  }
  }
- let accepted=0,emptyRun=0;
+ let accepted=0;
  for(const off of offsets){
   if(!additional&&coverage==='count'&&accepted>=requested)break;
   let parts=offsetCandidates(source,base,off,p);
   if(mask)parts=parts.flatMap(f=>splitOutsideCoverage(f,mask));
-  let chosen=longestNearReference(parts,base,off,width,additional&&coverage==='remaining');
-  if(!chosen.length){emptyRun++;if((coverage==='fill'||coverage==='remaining')&&emptyRun>80)break;continue}
-  emptyRun=0;
+  let chosen=usableCandidateParts(parts,width);
+  if(!chosen.length)continue;
+  // KEEP EVERY clipped component. A concave polygon can intersect one guidance
+  // row in two or more places; discarding the shorter components caused the
+  // exact middle gap and missing corner seen in the field tests.
   for(const f of chosen)lines.push(f.geometry.coordinates.map(([x,y])=>[y,x]));
   accepted++;
  }
