@@ -109,7 +109,7 @@ map.on('locationerror',()=>alert('Allow location permission and try again.'));
 $('#createNew').onclick=newField;$('#fieldsHome').onclick=showFieldsHome;
 function newField(){open(`<h2>Create New Field</h2><label>Field name<input id="nm" placeholder="Field name"></label><button id="next" class="primary">Continue</button>`);$('#next').onclick=()=>{let n=$('#nm').value.trim();if(!n)return;S=emptyField(n);save();chooseMethod()}}
 function chooseMethod(){open(`<h2>${escapeHtml(S.name)}</h2><p>How do you want to create the field boundary?</p><div class="row"><button id="manual" class="primary">Manual</button><button id="gps">GPS</button></div>`);$('#manual').onclick=drawScreen;$('#gps').onclick=()=>alert('GPS boundary recording is not enabled yet.')}
-function setMapBar(html,title=''){drawer.classList.add('hidden');home.classList.add('hidden');mapBar.innerHTML=html;mapBar.classList.remove('hidden');if(title){stageTitle.textContent=title;stageTitle.classList.remove('hidden')}else stageTitle.classList.add('hidden')}
+function setMapBar(html,title=''){drawer.classList.add('hidden');home.classList.add('hidden');stageTitle.classList.add('hidden');mapBar.innerHTML=(title?`<div class="bar-title">${escapeHtml(title)}</div>`:'')+`<div class="bar-actions">${html}</div>`;mapBar.classList.remove('hidden')}
 function drawScreen(){removeHandle();hidePointMenu();S.stage='draw';mode='draw';setMapBar(`<button id="backDraw">← Back</button><button id="undo">↶ Undo</button><span id="cnt">${S.boundary.length} pts</span><button id="lock" class="primary">Save</button>`,'CREATE FIELD · Draw & Adjust Boundary');$('#backDraw').onclick=()=>S.boundary.length?showFieldsHome():chooseMethod();$('#undo').onclick=()=>{removeHandle();if(S.boundary.length)S.boundary.pop();redraw();drawScreen()};$('#lock').onclick=()=>{if(S.boundary.length<3)return alert('Add at least 3 points.');removeHandle();mode=null;S.stage='locked';sectionScreen()};redraw()}
 function nearestPointAt(latlng,pixels=32){let q=map.latLngToContainerPoint(latlng),best=-1,dist=Infinity;S.boundary.forEach((p,i)=>{let d=q.distanceTo(map.latLngToContainerPoint(p));if(d<dist){dist=d;best=i}});return dist<=pixels?best:-1}
 function nearestGuidePointAt(latlng,pixels=32){if(!guideDraft)return-1;let q=map.latLngToContainerPoint(latlng),best=-1,dist=Infinity;guideDraft.points.forEach((p,i)=>{let d=q.distanceTo(map.latLngToContainerPoint(p));if(d<dist){dist=d;best=i}});return dist<=pixels?best:-1}
@@ -183,7 +183,32 @@ function offsetCandidates(source,base,off,p){
   let coords=base.geometry.coordinates,a=turf.point(coords[0]),b=turf.point(coords[coords.length-1]),bearing=turf.bearing(a,b),mid=turf.midpoint(a,b),box=turf.bbox(p),diag=turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'}),c=turf.destination(mid,off,bearing+90,{units:'meters'}),x=turf.destination(c,diag*2,bearing+180,{units:'meters'}),y=turf.destination(c,diag*2,bearing,{units:'meters'});return clipLine(turf.lineString([x.geometry.coordinates,y.geometry.coordinates]),p)
  }
  let signs=source==='border'?[1,-1]:[1],best=[];
- for(const sign of signs){try{let ref=Math.abs(off)<.001?base:turf.lineOffset(base,sign*off,{units:'meters'}),parts=clipLine(ref,p);if(parts.length){best=parts;break}}catch(e){console.warn('offset failed',e)}}return best
+ for(const sign of signs){try{
+  let ref=base;
+  if(Math.abs(off)>=.001){
+   // Densifying the curved reference before offsetting prevents Turf's miter joins
+   // from producing long spikes at bends.
+   if(source==='curve'){
+    let len=turf.length(base,{units:'meters'}), coords=[];
+    for(let d=0;d<len;d+=Math.max(1.5,Math.min(4,len/80)))coords.push(turf.along(base,d,{units:'meters'}).geometry.coordinates);
+    coords.push(turf.along(base,len,{units:'meters'}).geometry.coordinates);
+    ref=turf.lineString(coords);
+   }
+   ref=turf.lineOffset(ref,sign*off,{units:'meters'});
+  }
+  let parts=clipLine(ref,p).filter(f=>{
+   // A clipped guidance fragment must actually live in/on the field. This also
+   // removes the occasional lineOffset spike that lineSplit can leave behind.
+   let c=f.geometry.coordinates;if(c.length<2)return false;
+   let len=turf.length(f,{units:'meters'});if(len<.75)return false;
+   for(let q=0;q<=4;q++){
+    let pt=turf.along(f,len*q/4,{units:'meters'});
+    if(!turf.booleanPointInPolygon(pt,p,{ignoreBoundary:false}))return false;
+   }
+   return true;
+  });
+  if(parts.length){best=parts;break}
+ }catch(e){console.warn('offset failed',e)}}return best
 }
 function generateGuidance(source,additional=false){
  let width=+$('#gw').value||9,name=$('#gn').value.trim()||'Guidance',p=usablePoly(),lines=[],coverage=$('#coverage').value,base=baseReference(source);

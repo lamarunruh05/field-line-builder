@@ -21,3 +21,17 @@
 .fields-home{right:14px!important;font-size:22px!important}
 .mapbar .screen-title{display:none!important}
 @media(max-width:520px){#topbar{top:10px;padding:8px 12px}.stage-title{top:68px;max-width:48vw}.leaflet-top.leaflet-left{top:68px!important}.find-me,.fields-home{top:68px!important}}
+
+/* v2.2 — clean top control rail + screen title inside bottom action box */
+.stage-title{display:none!important}
+#topbar{top:14px!important;left:50%!important;transform:translateX(-50%)!important;min-height:48px!important;padding:9px 16px!important;border-radius:16px!important;gap:14px!important;box-shadow:0 3px 16px #0004!important}
+#topbar b{font-size:18px;line-height:1.05}#topbar span{font-size:13px}
+.leaflet-top.leaflet-left{top:78px!important;left:14px!important;display:flex!important;gap:8px!important}
+.find-me,.fields-home{top:78px!important;width:48px!important;height:48px!important;border-radius:14px!important}
+.find-me{right:70px!important}.fields-home{right:14px!important}
+.mapbar{display:block!important;padding:8px!important;border-radius:16px!important;min-width:min(460px,calc(100vw - 24px));max-width:calc(100vw - 24px)!important}
+.mapbar.hidden{display:none!important}
+.mapbar .bar-title{font-size:12px;font-weight:850;letter-spacing:.02em;color:#526158;padding:2px 8px 7px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mapbar .bar-actions{display:flex;align-items:center;justify-content:center;gap:7px}
+.mapbar .bar-actions button{flex:0 1 auto}.mapbar .bar-actions span{flex:0 0 auto}
+@media(max-width:520px){#topbar{top:12px!important;max-width:calc(100vw - 150px)!important;padding:8px 12px!important}#topbar b{font-size:16px}.leaflet-top.leaflet-left{top:74px!important}.find-me,.fields-home{top:74px!important}.mapbar .bar-title{font-size:11px}}
