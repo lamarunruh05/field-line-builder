@@ -32,7 +32,7 @@ async function enableGoogleSatellite(key){try{await loadGoogleMutant();await loa
 const savedGoogleKey=localStorage.getItem('flbGoogleMapsKey');
 if(savedGoogleKey)enableGoogleSatellite(savedGoogleKey).then(r=>{if(!r.ok)console.error('Saved Google key could not enable satellite:',r.error)});
 
-const $=s=>document.querySelector(s),drawer=$('#drawer'),home=$('#homeActions'),mapBar=$('#mapBar'),pointMenu=$('#pointMenu');
+const $=s=>document.querySelector(s),drawer=$('#drawer'),home=$('#homeActions'),mapBar=$('#mapBar'),stageTitle=$('#stageTitle'),pointMenu=$('#pointMenu');
 const emptyField=(name='')=>({id:Date.now()+Math.random(),name,boundary:[],sections:[],stage:'home',width:9,borderPasses:3,guidanceSets:[]});
 let legacy=JSON.parse(localStorage.getItem('flb13')||'null'),DB=JSON.parse(localStorage.getItem('flbFields')||'null');
 if(!DB)DB={fields:legacy&&legacy.name?[{...legacy,id:legacy.id||Date.now()}]:[],currentId:legacy&&legacy.name?(legacy.id||Date.now()):null};
@@ -40,7 +40,7 @@ let S=DB.fields.find(f=>f.id===DB.currentId)||emptyField();
 let mode=null,selected=-1,first=-1,op=null,suppressNextMapTap=false,layer=L.layerGroup().addTo(map),guide=L.layerGroup().addTo(map),handle=null,polyLayer=null,dotMarkers=[],editHistory=[],guideDraft=null,guideMarkers=[],guideHandle=null,highlightLayer=null;
 
 function save(){if(S&&S.name){let i=DB.fields.findIndex(f=>f.id===S.id);if(i>=0)DB.fields[i]=S;else DB.fields.push(S);DB.currentId=S.id}localStorage.setItem('flbFields',JSON.stringify(DB));localStorage.setItem('flb13',JSON.stringify(S))}
-function open(html){removeHandle();removeGuideHandle();hidePointMenu();mapBar.classList.add('hidden');drawer.innerHTML=html;drawer.classList.remove('hidden');home.classList.add('hidden')}
+function open(html){removeHandle();removeGuideHandle();hidePointMenu();mapBar.classList.add('hidden');stageTitle.classList.add('hidden');drawer.innerHTML=html;drawer.classList.remove('hidden');home.classList.add('hidden')}
 function close(){drawer.classList.add('hidden')}
 function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function forwardIdx(a,b){let out=[a],i=a,n=S.boundary.length;while(i!==b){i=(i+1)%n;out.push(i);if(out.length>n+1)break}return out}
@@ -66,27 +66,35 @@ function sectionIndices(s){
  return idxs(s.start,s.end)
 }
 function sectionLatLngs(s){let pts=sectionIndices(s).map(i=>S.boundary[i]);return s.smooth?smoothLatLngs(pts):pts}
-// The blue field boundary is always the exact boundary the user drew/edited.
-// Smoothing is derived geometry for a selected border section only; it must never change field area/shape.
+// Smoothing replaces the geometry of that border section for every downstream operation.
+// The selected endpoints stay fixed, so the field remains closed; only the chosen side is rounded.
 function boundaryLatLngs(){return S.boundary.map(p=>p.slice())}
+function forwardSectionPath(s){
+ let p=sectionIndices(s),n=S.boundary.length;if(p.length<2)return p;
+ return p[1]===(p[0]+1)%n?p:p.slice().reverse()
+}
 function effectiveBoundaryLatLngs(){
- if(S.boundary.length<3)return boundaryLatLngs();
- let n=S.boundary.length,out=[],covered=new Set();
- for(let i=0;i<n;i++){
-  if(covered.has(i))continue;
-  let sec=S.sections.find(x=>x.smooth&&sectionIndices(x)[0]===i);
-  if(sec){let path=sectionIndices(sec),sm=smoothLatLngs(path.map(j=>S.boundary[j]));out.push(...sm.slice(0,-1));path.slice(0,-1).forEach(j=>covered.add(j));i=path[path.length-1]-1;continue}
-  out.push(S.boundary[i]);covered.add(i)
+ let n=S.boundary.length;if(n<3)return boundaryLatLngs();
+ let smooth=(S.sections||[]).filter(s=>s.smooth).map(s=>({s,path:forwardSectionPath(s)})).filter(o=>o.path.length>1);
+ if(!smooth.length)return boundaryLatLngs();
+ let interior=new Set();smooth.forEach(o=>o.path.slice(1,-1).forEach(i=>interior.add(i)));
+ let start=0;while(start<n&&interior.has(start))start++;if(start>=n)start=0;
+ let byStart=new Map();smooth.forEach(o=>byStart.set(o.path[0],o));
+ let out=[],i=start,edges=0,guard=0;
+ while(edges<n&&guard++<n*4){
+  let o=byStart.get(i);
+  if(o){let pts=o.path.map(j=>S.boundary[j]),sm=smoothLatLngs(pts);out.push(...sm.slice(0,-1).map(p=>p.slice()));edges+=o.path.length-1;i=o.path[o.path.length-1];continue}
+  out.push(S.boundary[i].slice());i=(i+1)%n;edges++
  }
  return out.length>=3?out:boundaryLatLngs()
 }
-function ring(useEffective=false){let src=useEffective?effectiveBoundaryLatLngs():boundaryLatLngs(),r=src.map(([a,b])=>[b,a]);if(r.length)r.push(r[0]);return r}
-function poly(useEffective=false){let r=ring(useEffective);return r.length>3?turf.polygon([r]):null}
-function area(){return poly(false)?turf.area(poly(false))/10000:0}
+function ring(useEffective=true){let src=useEffective?effectiveBoundaryLatLngs():boundaryLatLngs(),r=src.map(([a,b])=>[b,a]);if(r.length)r.push(r[0]);return r}
+function poly(useEffective=true){let r=ring(useEffective);return r.length>3?turf.polygon([r]):null}
+function area(){let p=poly(true);return p?turf.area(p)/10000:0}
 
 function redraw(){
  layer.clearLayers();guide.clearLayers();dotMarkers=[];guideMarkers=[];polyLayer=null;if(highlightLayer){map.removeLayer(highlightLayer);highlightLayer=null}
- if(S.boundary.length){polyLayer=L.polygon(boundaryLatLngs(),{color:'#1683ff',weight:3,fillOpacity:.07,interactive:false}).addTo(layer);
+ if(S.boundary.length){polyLayer=L.polygon(effectiveBoundaryLatLngs(),{color:'#1683ff',weight:3,fillOpacity:.07,interactive:false}).addTo(layer);
   if(['draw','locked','edit'].includes(S.stage))S.boundary.forEach((p,i)=>{let m=L.circleMarker(p,{radius:i===first?8:6,color:i===first?'#f0a000':'#1683ff',weight:3,fillColor:'#fff',fillOpacity:1,bubblingMouseEvents:false}).addTo(layer);dotMarkers[i]=m;m.on('click',e=>{L.DomEvent.stopPropagation(e);pointClick(i,e)})});
   S.sections.forEach(s=>L.polyline(sectionLatLngs(s),{color:'#f0a000',weight:5,opacity:.7,interactive:false}).addTo(layer));
  }
@@ -101,8 +109,8 @@ map.on('locationerror',()=>alert('Allow location permission and try again.'));
 $('#createNew').onclick=newField;$('#fieldsHome').onclick=showFieldsHome;
 function newField(){open(`<h2>Create New Field</h2><label>Field name<input id="nm" placeholder="Field name"></label><button id="next" class="primary">Continue</button>`);$('#next').onclick=()=>{let n=$('#nm').value.trim();if(!n)return;S=emptyField(n);save();chooseMethod()}}
 function chooseMethod(){open(`<h2>${escapeHtml(S.name)}</h2><p>How do you want to create the field boundary?</p><div class="row"><button id="manual" class="primary">Manual</button><button id="gps">GPS</button></div>`);$('#manual').onclick=drawScreen;$('#gps').onclick=()=>alert('GPS boundary recording is not enabled yet.')}
-function setMapBar(html,title=''){drawer.classList.add('hidden');home.classList.add('hidden');mapBar.innerHTML=(title?`<span class="screen-title">${escapeHtml(title)}</span>`:'')+html;mapBar.classList.remove('hidden')}
-function drawScreen(){removeHandle();hidePointMenu();S.stage='draw';mode='draw';setMapBar(`<button id="backDraw">← Back</button><button id="undo">↶ Undo</button><span id="cnt">${S.boundary.length} pts</span><button id="lock" class="primary">Save</button>`,'1 · Draw & Adjust Field Boundary');$('#backDraw').onclick=()=>S.boundary.length?showFieldsHome():chooseMethod();$('#undo').onclick=()=>{removeHandle();if(S.boundary.length)S.boundary.pop();redraw();drawScreen()};$('#lock').onclick=()=>{if(S.boundary.length<3)return alert('Add at least 3 points.');removeHandle();mode=null;S.stage='locked';sectionScreen()};redraw()}
+function setMapBar(html,title=''){drawer.classList.add('hidden');home.classList.add('hidden');mapBar.innerHTML=html;mapBar.classList.remove('hidden');if(title){stageTitle.textContent=title;stageTitle.classList.remove('hidden')}else stageTitle.classList.add('hidden')}
+function drawScreen(){removeHandle();hidePointMenu();S.stage='draw';mode='draw';setMapBar(`<button id="backDraw">← Back</button><button id="undo">↶ Undo</button><span id="cnt">${S.boundary.length} pts</span><button id="lock" class="primary">Save</button>`,'CREATE FIELD · Draw & Adjust Boundary');$('#backDraw').onclick=()=>S.boundary.length?showFieldsHome():chooseMethod();$('#undo').onclick=()=>{removeHandle();if(S.boundary.length)S.boundary.pop();redraw();drawScreen()};$('#lock').onclick=()=>{if(S.boundary.length<3)return alert('Add at least 3 points.');removeHandle();mode=null;S.stage='locked';sectionScreen()};redraw()}
 function nearestPointAt(latlng,pixels=32){let q=map.latLngToContainerPoint(latlng),best=-1,dist=Infinity;S.boundary.forEach((p,i)=>{let d=q.distanceTo(map.latLngToContainerPoint(p));if(d<dist){dist=d;best=i}});return dist<=pixels?best:-1}
 function nearestGuidePointAt(latlng,pixels=32){if(!guideDraft)return-1;let q=map.latLngToContainerPoint(latlng),best=-1,dist=Infinity;guideDraft.points.forEach((p,i)=>{let d=q.distanceTo(map.latLngToContainerPoint(p));if(d<dist){dist=d;best=i}});return dist<=pixels?best:-1}
 map.on('click',e=>{if(suppressNextMapTap){suppressNextMapTap=false;return}hidePointMenu();if(handle){removeHandle();redraw();return}if(guideHandle){removeGuideHandle();redraw();return}
@@ -119,7 +127,7 @@ function showPointMenu(i){removeHandle();first=i;redraw();let pt=map.latLngToCon
 function hidePointMenu(){pointMenu.classList.add('hidden')}
 pointMenu.querySelectorAll('[data-op]').forEach(b=>b.onclick=e=>{e.stopPropagation();op=b.dataset.op;hidePointMenu();redraw()});
 function cancelSectionChoice(){first=-1;op=null;hidePointMenu();redraw()}
-function sectionScreen(){removeHandle();hidePointMenu();S.stage='locked';mode=null;setMapBar(`<button id="backPoints">← Back</button><button id="undoEdit">↶ Undo</button><button id="saveField" class="primary">Save</button>`,'2 · Name & Smooth Border Sections');$('#backPoints').onclick=()=>{first=-1;op=null;drawScreen()};$('#undoEdit').onclick=undoEdit;$('#saveField').onclick=()=>{S.stage='saved';first=-1;op=null;hidePointMenu();mapBar.classList.add('hidden');redraw();editFieldScreen()};redraw()}
+function sectionScreen(){removeHandle();hidePointMenu();S.stage='locked';mode=null;setMapBar(`<button id="backPoints">← Back</button><button id="undoEdit">↶ Undo</button><button id="saveField" class="primary">Save</button>`,'EDIT FIELD · Name & Smooth Borders');$('#backPoints').onclick=()=>{first=-1;op=null;drawScreen()};$('#undoEdit').onclick=undoEdit;$('#saveField').onclick=()=>{S.stage='saved';first=-1;op=null;hidePointMenu();mapBar.classList.add('hidden');redraw();editFieldScreen()};redraw()}
 function snapshotEdit(){editHistory.push({boundary:S.boundary.map(p=>p.slice()),sections:S.sections.map(s=>({...s}))});if(editHistory.length>30)editHistory.shift()}
 function undoEdit(){let h=editHistory.pop();if(!h)return;S.boundary=h.boundary;S.sections=h.sections;first=-1;op=null;redraw();sectionScreen()}
 function samePath(a,b){let A=sectionIndices(a),B=b;return A.length===B.length&&A.every((v,i)=>v===B[i])}
@@ -147,7 +155,7 @@ function guidanceOptions(source,additional=false){
  if(additional)$('#coverage').onchange=()=>$('#qtyBox').classList.toggle('hidden',$('#coverage').value!=='count');else $('#coverage').onchange=()=>$('#countLab').classList.toggle('hidden',$('#coverage').value!=='count');
  $('#preview').onclick=()=>generateGuidance(source,additional);$('#back').onclick=()=>{if(source==='ab'||source==='curve')startGuideDraft(source,additional);else guidanceMenu()}
 }
-function usablePoly(){let p=poly(false);if(S.borderPasses>0){let b=turf.buffer(p,-S.borderPasses*S.width/1000,{units:'kilometers'});if(b&&b.geometry.type==='Polygon')return b}return p}
+function usablePoly(){let p=poly(true);if(S.borderPasses>0){let b=turf.buffer(p,-S.borderPasses*S.width/1000,{units:'kilometers'});if(b&&b.geometry.type==='Polygon')return b}return p}
 function polygonBoundaries(p){
  try{let q=turf.polygonToLine(p);return q.type==='FeatureCollection'?q.features:[q]}catch{return[]}
 }
@@ -158,7 +166,7 @@ function clipLine(line,p){
  return parts.filter(f=>{let len=turf.length(f,{units:'meters'});if(len<.75)return false;let mid=turf.along(f,len/2,{units:'meters'});return turf.booleanPointInPolygon(mid,p)})
 }
 function existingMainLines(){return mainSets().flatMap(s=>s.lines)}
-function existingCoverage(width){let ex=existingMainLines();if(!ex.length)return null;try{let buffs=ex.map(g=>turf.buffer(turf.lineString(g.map(([y,x])=>[x,y])),width*.49,{units:'meters'})).filter(Boolean);return buffs.length===1?buffs[0]:turf.union(turf.featureCollection(buffs))}catch(e){console.warn('coverage mask failed',e);return null}}
+function existingCoverage(width){let ex=existingMainLines();if(!ex.length)return null;try{let buffs=ex.map(g=>turf.buffer(turf.lineString(g.map(([y,x])=>[x,y])),width*.995,{units:'meters'})).filter(Boolean);return buffs.length===1?buffs[0]:turf.union(turf.featureCollection(buffs))}catch(e){console.warn('coverage mask failed',e);return null}}
 function splitOutsideCoverage(line,coverage){if(!coverage)return[line];let parts=[line];try{for(const cutter of polygonBoundaries(coverage)){let next=[];for(const part of parts){let sp=turf.lineSplit(part,cutter);next.push(...(sp.features.length?sp.features:[part]))}parts=next}}catch(e){console.warn('coverage split failed',e)}return parts.filter(f=>{let len=turf.length(f,{units:'meters'});if(len<.75)return false;let mid=turf.along(f,len/2,{units:'meters'});return !turf.booleanPointInPolygon(mid,coverage)})}
 function baseReference(source){if(source==='border'){let sec=S.sections[S._border];return turf.lineString(sectionLatLngs(sec).map(([y,x])=>[x,y]))}let pts=guideDraft?.points||[];if(source==='curve')return turf.lineString(smoothLatLngs(pts).map(([y,x])=>[x,y]));return turf.lineString(pts.map(([y,x])=>[x,y]))}
 function lineMid(f){let len=turf.length(f,{units:'meters'});return turf.along(f,len/2,{units:'meters'})}
@@ -187,8 +195,13 @@ function generateGuidance(source,additional=false){
  let offsets=[];
  if(source==='border'){
   let start=(S.borderPasses+.5)*width;
-  if(additional&&coverage==='count')for(let i=0;i<Math.max(left,right);i++)offsets.push(start+i*width);
-  else for(let i=0;i<1000;i++)offsets.push(start+i*width);
+  if(additional&&coverage==='count'){
+   // Respect left/right quantities. Only the side that actually falls inside the field will survive clipping.
+   for(let i=0;i<Math.max(left,right);i++){if(i<left)offsets.push(-(start+i*width));if(i<right)offsets.push(start+i*width)}
+  }else{
+   // Try both sides so border direction never decides whether guidance appears.
+   for(let i=0;i<1000;i++){let d=start+i*width;offsets.push(d,-d)}
+  }
  }else{
   offsets.push(0);
   if(additional&&coverage==='count'){for(let i=1;i<=Math.max(left,right);i++){if(i<=left)offsets.push(-i*width);if(i<=right)offsets.push(i*width)}}
@@ -212,10 +225,10 @@ function generateGuidance(source,additional=false){
 }
 
 function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="geo" class="primary">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><div id="exportStatus" class="muted"></div><button id="back">Back</button>`);$('#geo').onclick=()=>downloadBlob(new Blob([JSON.stringify(fc(),null,2)],{type:'application/geo+json'}),safe(S.name)+'.geojson');$('#shp').onclick=async()=>{let b=$('#shp'),st=$('#exportStatus');try{b.disabled=true;st.textContent='Building ZIP…';let data=await shpwrite.zip(fc(),{folder:safe(S.name),types:{polygon:'boundary',line:'lines',point:'points'}});let blob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});downloadBlob(blob,safe(S.name)+'.zip');st.textContent='ZIP ready. Check your Downloads folder.'}catch(e){console.error(e);st.textContent='Could not create ZIP: '+(e?.message||e)}finally{b.disabled=false}};$('#back').onclick=editFieldScreen}
-function fc(){let f=[turf.polygon([ring()],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
+function fc(){let f=[turf.polygon([ring(true)],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
 function safe(s){return(s||'field').replace(/[^a-z0-9_-]+/gi,'_')}
 function downloadBlob(blob,n){let url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=n;a.style.display='none';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(url);a.remove()},3000)}
-function showFieldsHome(){removeHandle();removeGuideHandle();guideDraft=null;hidePointMenu();mode=null;mapBar.classList.add('hidden');home.classList.add('hidden');let cards=DB.fields.map(f=>{let old=S;S=f;let a=area().toFixed(2);S=old;return `<div class="field-card"><div><b>${escapeHtml(f.name)}</b><small>${a} ha</small></div><div class="field-card-actions"><button data-view="${f.id}" class="primary">View</button><button data-menu="${f.id}">⋮</button></div></div>`}).join('');open(`<div class="fields-head"><h2>My Fields</h2><button id="newFromList" class="primary">+ New Field</button></div>${!localStorage.getItem('flbGoogleMapsKey')?'<button id="setupGoogleHome" class="primary">Enable Google Satellite</button>':''}${cards||'<p>No fields saved yet. Create your first field.</p>'}`);$('#newFromList').onclick=newField;if($('#setupGoogleHome'))$('#setupGoogleHome').onclick=googleMapSetup;document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>openField(+b.dataset.view));document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>fieldItemMenu(+b.dataset.menu));redraw()}
+function showFieldsHome(){removeHandle();removeGuideHandle();guideDraft=null;hidePointMenu();mode=null;mapBar.classList.add('hidden');stageTitle.classList.add('hidden');home.classList.add('hidden');let cards=DB.fields.map(f=>{let old=S;S=f;let a=area().toFixed(2);S=old;return `<div class="field-card"><div><b>${escapeHtml(f.name)}</b><small>${a} ha</small></div><div class="field-card-actions"><button data-view="${f.id}" class="primary">View</button><button data-menu="${f.id}">⋮</button></div></div>`}).join('');open(`<div class="fields-head"><h2>My Fields</h2><button id="newFromList" class="primary">+ New Field</button></div>${!localStorage.getItem('flbGoogleMapsKey')?'<button id="setupGoogleHome" class="primary">Enable Google Satellite</button>':''}${cards||'<p>No fields saved yet. Create your first field.</p>'}`);$('#newFromList').onclick=newField;if($('#setupGoogleHome'))$('#setupGoogleHome').onclick=googleMapSetup;document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>openField(+b.dataset.view));document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>fieldItemMenu(+b.dataset.menu));redraw()}
 function openField(id){let f=DB.fields.find(x=>x.id===id);if(!f)return;S=f;DB.currentId=id;save();if(S.boundary.length)map.fitBounds(L.latLngBounds(S.boundary),{padding:[45,45],maxZoom:19});viewFieldScreen()}
 function fieldItemMenu(id){let f=DB.fields.find(x=>x.id===id);if(!f)return;open(`<h3>${escapeHtml(f.name)}</h3><button id="deleteField" class="danger">Delete Field</button><button id="back">Back</button>`);$('#deleteField').onclick=()=>{if(confirm(`Delete ${f.name}? This cannot be undone.`)){DB.fields=DB.fields.filter(x=>x.id!==id);if(DB.currentId===id)DB.currentId=null;localStorage.setItem('flbFields',JSON.stringify(DB));S=emptyField();redraw();showFieldsHome()}};$('#back').onclick=showFieldsHome}
 showFieldsHome();redraw();

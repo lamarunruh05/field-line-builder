@@ -12,3 +12,12 @@
 .fields-home{top:118px!important;right:18px!important}
 .leaflet-top.leaflet-left{top:112px!important}
 .drag-handle-wrap,.drag-handle{touch-action:none!important;user-select:none!important;-webkit-user-select:none!important}
+/* v2.1 stable mobile header/control layout */
+.stage-title{position:fixed;z-index:880;top:72px;left:50%;transform:translateX(-50%);background:#173f2a;color:#fff;border-radius:12px;padding:7px 12px;font-size:12px;font-weight:800;line-height:1.15;box-shadow:0 2px 10px #0004;white-space:nowrap;max-width:52vw;overflow:hidden;text-overflow:ellipsis}
+.leaflet-top.leaflet-left{top:72px!important;left:10px!important;display:flex!important;align-items:flex-start!important;gap:8px!important}
+.leaflet-top.leaflet-left .leaflet-control{margin:0!important}
+.find-me,.fields-home{top:72px!important;bottom:auto!important;width:44px!important;height:44px!important;border-radius:12px!important;background:#fff!important;box-shadow:0 2px 10px #0003!important}
+.find-me{right:66px!important}
+.fields-home{right:14px!important;font-size:22px!important}
+.mapbar .screen-title{display:none!important}
+@media(max-width:520px){#topbar{top:10px;padding:8px 12px}.stage-title{top:68px;max-width:48vw}.leaflet-top.leaflet-left{top:68px!important}.find-me,.fields-home{top:68px!important}}
