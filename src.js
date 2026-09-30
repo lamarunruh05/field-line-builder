@@ -178,37 +178,50 @@ function longestNearReference(parts,base,targetOffset,width,keepAll=false){
  // Fill wedges, but reject remote fragments created by an offset folding back across the field.
  let best=valid[0],bestD=distanceToReference(best,base);return valid.filter(f=>Math.abs(distanceToReference(f,base)-bestD)<=Math.max(width*.8,2));
 }
-function offsetCandidates(source,base,off,p){
- if(source==='ab'){
-  let coords=base.geometry.coordinates,a=turf.point(coords[0]),b=turf.point(coords[coords.length-1]),bearing=turf.bearing(a,b),mid=turf.midpoint(a,b),box=turf.bbox(p),diag=turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'}),c=turf.destination(mid,off,bearing+90,{units:'meters'}),x=turf.destination(c,diag*2,bearing+180,{units:'meters'}),y=turf.destination(c,diag*2,bearing,{units:'meters'});return clipLine(turf.lineString([x.geometry.coordinates,y.geometry.coordinates]),p)
- }
- let signs=source==='border'?[1,-1]:[1],best=[];
- for(const sign of signs){try{
+function isStraightReference(base){
+ let c=base.geometry.coordinates;if(c.length<=2)return true;
+ let a=turf.point(c[0]),b=turf.point(c[c.length-1]),max=0;
+ let chord=turf.lineString([c[0],c[c.length-1]]);
+ for(let i=1;i<c.length-1;i++)max=Math.max(max,turf.pointToLineDistance(turf.point(c[i]),chord,{units:'meters'}));
+ return max<0.35;
+}
+function extendedParallel(base,off,p){
+ let c=base.geometry.coordinates,a=turf.point(c[0]),b=turf.point(c[c.length-1]);
+ let bearing=turf.bearing(a,b),mid=turf.midpoint(a,b),box=turf.bbox(p);
+ let diag=Math.max(100,turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'})*2.5);
+ let center=turf.destination(mid,off,bearing+90,{units:'meters'});
+ let x=turf.destination(center,diag,bearing+180,{units:'meters'}),y=turf.destination(center,diag,bearing,{units:'meters'});
+ return clipLine(turf.lineString([x.geometry.coordinates,y.geometry.coordinates]),p);
+}
+function curvedOffset(base,off,p){
+ try{
   let ref=base;
   if(Math.abs(off)>=.001){
-   // Densifying the curved reference before offsetting prevents Turf's miter joins
-   // from producing long spikes at bends.
-   if(source==='curve'){
-    let len=turf.length(base,{units:'meters'}), coords=[];
-    for(let d=0;d<len;d+=Math.max(1.5,Math.min(4,len/80)))coords.push(turf.along(base,d,{units:'meters'}).geometry.coordinates);
-    coords.push(turf.along(base,len,{units:'meters'}).geometry.coordinates);
-    ref=turf.lineString(coords);
-   }
-   ref=turf.lineOffset(ref,sign*off,{units:'meters'});
+   let len=turf.length(base,{units:'meters'}),coords=[],step=Math.max(1.5,Math.min(4,len/80));
+   for(let d=0;d<len;d+=step)coords.push(turf.along(base,d,{units:'meters'}).geometry.coordinates);
+   coords.push(turf.along(base,len,{units:'meters'}).geometry.coordinates);
+   ref=turf.lineOffset(turf.lineString(coords),off,{units:'meters'});
   }
-  let parts=clipLine(ref,p).filter(f=>{
-   // A clipped guidance fragment must actually live in/on the field. This also
-   // removes the occasional lineOffset spike that lineSplit can leave behind.
-   let c=f.geometry.coordinates;if(c.length<2)return false;
+  return clipLine(ref,p).filter(f=>{
    let len=turf.length(f,{units:'meters'});if(len<.75)return false;
-   for(let q=0;q<=4;q++){
-    let pt=turf.along(f,len*q/4,{units:'meters'});
-    if(!turf.booleanPointInPolygon(pt,p,{ignoreBoundary:false}))return false;
-   }
+   for(let q=0;q<=4;q++)if(!turf.booleanPointInPolygon(turf.along(f,len*q/4,{units:'meters'}),p,{ignoreBoundary:false}))return false;
    return true;
   });
-  if(parts.length){best=parts;break}
- }catch(e){console.warn('offset failed',e)}}return best
+ }catch(e){console.warn('offset failed',e);return[]}
+}
+function offsetCandidates(source,base,off,p){
+ if(source==='ab')return extendedParallel(base,off,p);
+ if(source==='border'&&isStraightReference(base))return extendedParallel(base,off,p);
+ return curvedOffset(base,off,p);
+}
+function totalLength(parts){return parts.reduce((n,f)=>n+turf.length(f,{units:'meters'}),0)}
+function chooseBorderSide(base,p,start){
+ // A named border is part of the field edge. Test both normal directions at the
+ // first main-row centre and lock onto the side that actually enters the field.
+ let plus=offsetCandidates('border',base,start,p),minus=offsetCandidates('border',base,-start,p);
+ let lp=totalLength(plus),lm=totalLength(minus);
+ if(!lp&&!lm)return 0;
+ return lp>=lm?1:-1;
 }
 function generateGuidance(source,additional=false){
  let width=+$('#gw').value||9,name=$('#gn').value.trim()||'Guidance',p=usablePoly(),lines=[],coverage=$('#coverage').value,base=baseReference(source);
@@ -219,14 +232,13 @@ function generateGuidance(source,additional=false){
  let right=additional&&coverage==='count'?Math.max(0,+($('#rightQty')?.value||0)):Infinity;
  let offsets=[];
  if(source==='border'){
-  let start=(S.borderPasses+.5)*width;
-  if(additional&&coverage==='count'){
-   // Respect left/right quantities. Only the side that actually falls inside the field will survive clipping.
-   for(let i=0;i<Math.max(left,right);i++){if(i<left)offsets.push(-(start+i*width));if(i<right)offsets.push(start+i*width)}
-  }else{
-   // Try both sides so border direction never decides whether guidance appears.
-   for(let i=0;i<1000;i++){let d=start+i*width;offsets.push(d,-d)}
-  }
+  let start=(S.borderPasses+.5)*width,side=chooseBorderSide(base,p,start);
+  if(!side)return alert('No guidance lines could be created from this reference.');
+  // Once the inward side is known, every row advances farther into the field.
+  // Never alternate sides: an outward curved offset can re-enter elsewhere and
+  // was the cause of rows appearing in the middle or in disconnected wedges.
+  let maxRows=additional&&coverage==='count'?Math.max(left,right):1000;
+  for(let i=0;i<maxRows;i++)offsets.push(side*(start+i*width));
  }else{
   offsets.push(0);
   if(additional&&coverage==='count'){for(let i=1;i<=Math.max(left,right);i++){if(i<=left)offsets.push(-i*width);if(i<=right)offsets.push(i*width)}}
