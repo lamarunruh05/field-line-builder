@@ -6,3 +6,9 @@
 .fields-home{position:fixed;z-index:850;top:118px;right:18px;width:46px;height:46px;border-radius:50%;border:1px solid #cbd6cf;background:#fff;box-shadow:0 2px 10px #0003;font-size:24px}
 .leaflet-top.leaflet-left{top:62px}
 .screen-title{font-weight:800!important;color:#173f2a!important;min-width:auto!important;max-width:145px;white-space:normal;line-height:1.05}
+/* v2.0 geometry/edit UX fixes */
+.screen-title{top:70px!important;left:12px!important;transform:none!important;max-width:210px!important;background:#fff!important;color:#173f2a!important;border:1px solid #cbd6cf;border-radius:12px!important;padding:8px 10px!important;font-size:13px!important;line-height:1.15!important;box-shadow:0 2px 10px #0003!important}
+.find-me{top:72px!important;right:18px!important;bottom:auto!important}
+.fields-home{top:118px!important;right:18px!important}
+.leaflet-top.leaflet-left{top:112px!important}
+.drag-handle-wrap,.drag-handle{touch-action:none!important;user-select:none!important;-webkit-user-select:none!important}
