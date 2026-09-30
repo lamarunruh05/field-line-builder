@@ -193,13 +193,31 @@ function extendedParallel(base,off,p){
  let x=turf.destination(center,diag,bearing+180,{units:'meters'}),y=turf.destination(center,diag,bearing,{units:'meters'});
  return clipLine(turf.lineString([x.geometry.coordinates,y.geometry.coordinates]),p);
 }
+function extendCurvedReference(base,p){
+ // A drawn/named curve is only the reference shape. Guidance must continue from
+ // BOTH ends until it meets the usable field boundary. Extend each endpoint on
+ // its local tangent before offsetting; otherwise Turf offsets only the finite
+ // reference and rows stop short at one/both ends.
+ let c=base.geometry.coordinates;if(c.length<2)return base;
+ let box=turf.bbox(p),diag=Math.max(150,turf.distance([box[0],box[1]],[box[2],box[3]],{units:'meters'})*2.5);
+ let probe=Math.min(5,c.length-1);
+ let start=turf.point(c[0]),startIn=turf.point(c[probe]);
+ let end=turf.point(c[c.length-1]),endIn=turf.point(c[c.length-1-probe]);
+ let startBearing=turf.bearing(startIn,start);
+ let endBearing=turf.bearing(endIn,end);
+ let before=turf.destination(start,diag,startBearing,{units:'meters'}).geometry.coordinates;
+ let after=turf.destination(end,diag,endBearing,{units:'meters'}).geometry.coordinates;
+ return turf.lineString([before,...c,after]);
+}
 function curvedOffset(base,off,p){
  try{
-  let ref=base;
+  // Extend first, then offset. This makes every curved row long enough to be
+  // clipped by the polygon on both ends instead of ending where the reference ends.
+  let working=extendCurvedReference(base,p),ref=working;
   if(Math.abs(off)>=.001){
-   let len=turf.length(base,{units:'meters'}),coords=[],step=Math.max(1.5,Math.min(4,len/80));
-   for(let d=0;d<len;d+=step)coords.push(turf.along(base,d,{units:'meters'}).geometry.coordinates);
-   coords.push(turf.along(base,len,{units:'meters'}).geometry.coordinates);
+   let len=turf.length(working,{units:'meters'}),coords=[],step=Math.max(1.5,Math.min(4,len/120));
+   for(let d=0;d<len;d+=step)coords.push(turf.along(working,d,{units:'meters'}).geometry.coordinates);
+   coords.push(turf.along(working,len,{units:'meters'}).geometry.coordinates);
    ref=turf.lineOffset(turf.lineString(coords),off,{units:'meters'});
   }
   return clipLine(ref,p).filter(f=>{
