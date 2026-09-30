@@ -344,31 +344,40 @@ async function exportIsoViewGuideMap(){
  let b=$('#isoGuide'),st=$('#exportStatus'),entries=isoViewGuideEntries();
  if(!entries.length){st.textContent='Create and save guidance lines first.';return}
  try{
-  b.disabled=true;st.textContent='Building IsoView guide-map package…';
-  // IsoView previewed only the first feature when several guidance rows were
-  // stored in one SHP. Package every actual guidance row as its own complete
-  // SHP/SHX/DBF/PRJ set, while keeping them all in ONE download ZIP. On the
-  // monitor use Guide Maps > Import - Pen drive > Import all.
-  let out=new JSZip();
-  for(let i=0;i<entries.length;i++){
-   let e=entries[i];
-   st.textContent=`Building IsoView guide ${i+1} of ${entries.length}…`;
-   let one=await shpwrite.zip(e.fc,{folder:e.base,outputType:'blob',types:{polyline:e.base}});
-   let oneBlob=one instanceof Blob?one:new Blob([one],{type:'application/zip'});
-   let z=await JSZip.loadAsync(await oneBlob.arrayBuffer());
-   for(let name of Object.keys(z.files)){
-    let f=z.files[name]; if(f.dir)continue;
-    let leaf=name.split('/').pop();
-    if(!leaf)continue;
-    out.file(leaf,await f.async('uint8array'));
-   }
+  b.disabled=true;st.textContent='Building IsoView multi-line guide project…';
+
+  // IsoView "Project" guide maps are one Shapefile containing a set of
+  // predetermined lines. Some IsoView firmware only renders the first SHP
+  // *record*, even when a file contains several LineString records. A Shapefile
+  // PolyLine record can contain several parts, so write every guidance row as
+  // one MultiLineString feature (one SHP record, many independent line parts).
+  // This lets IsoView load the whole project at once while keeping the lines
+  // separate (no artificial connector between the end of one row and the next).
+  let parts=entries.map(e=>e.fc.features[0].geometry.coordinates);
+  let project=turf.featureCollection([
+   turf.multiLineString(parts,{
+    NAME:String(S.name||'Guide Project').slice(0,40),
+    GUIDES:parts.length
+   })
+  ]);
+
+  let base=((safe(S.name)||'FIELD').slice(0,28)+'_GUIDES').slice(0,36);
+  let data=await shpwrite.zip(project,{folder:base,outputType:'blob',types:{polyline:base}});
+  let dataBlob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});
+
+  // Flatten shp-write's folder so the required SHP/SHX/DBF/PRJ files are
+  // immediately visible when the ZIP is extracted to the USB root.
+  let src=await JSZip.loadAsync(await dataBlob.arrayBuffer()),out=new JSZip();
+  for(let name of Object.keys(src.files)){
+   let f=src.files[name]; if(f.dir)continue;
+   let leaf=name.split('/').pop(); if(!leaf)continue;
+   out.file(leaf,await f.async('uint8array'));
   }
-  out.file('README.txt',`IsoView Guide Map package\r\nField: ${S.name||''}\r\nGuidance maps: ${entries.length}\r\n\r\nExtract all files together to the USB drive.\r\nOn IsoView: Settings > Memory > Input Maps > Guide Maps > Import - Pen drive > Import all.\r\nEach Gxx_Lxxx name is one independently importable guidance row.\r\n`);
+  out.file('README.txt',`IsoView Guide Project\r\nField: ${S.name||''}\r\nGuidance lines: ${parts.length}\r\nProjection: WGS84 / EPSG:4326\r\n\r\nExtract the SHP, SHX, DBF and PRJ files together to the USB drive.\r\nOn IsoView import ${base}.SHP as a Guide Map, then choose Guide Pattern = Project.\r\nAll ${parts.length} guidance lines are stored as separate parts inside this single guide project.\r\n`);
   let blob=await out.generateAsync({type:'blob',compression:'DEFLATE'});
-  let base=(safe(S.name)||'ISOVIEW_GUIDES').slice(0,28)+'_ISOVIEW_GUIDES';
   downloadBlob(blob,base+'.zip');
-  st.textContent=`IsoView package ready: ${entries.length} separate guide map${entries.length===1?'':'s'} in one ZIP. Extract all files to the USB, then use Guide Maps > Import - Pen drive > Import all.`
- }catch(e){console.error(e);st.textContent='Could not create IsoView guide maps: '+(e?.message||e)}finally{b.disabled=false}
+  st.textContent=`IsoView project ready: ${parts.length} guidance line${parts.length===1?'':'s'} in one SHP project. Extract the ZIP to the USB and import ${base}.SHP.`;
+ }catch(e){console.error(e);st.textContent='Could not create IsoView guide project: '+(e?.message||e)}finally{b.disabled=false}
 }
 function fc(){let f=[turf.polygon([ring(true)],{type:'boundary',field:S.name})];S.sections.filter(s=>s.name).forEach(s=>f.push(turf.lineString(sectionLatLngs(s).map(([y,x])=>[x,y]),{type:'border',name:s.name})));S.guidanceSets.forEach(set=>set.lines.forEach((g,i)=>f.push(turf.lineString(g.map(([y,x])=>[x,y]),{type:set.kind,name:set.name,pass:i+1,width_m:S.width}))));return turf.featureCollection(f)}
 function safe(s){return(s||'field').replace(/[^a-z0-9_-]+/gi,'_')}
