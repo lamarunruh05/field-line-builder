@@ -34,7 +34,7 @@ const savedGoogleKey=localStorage.getItem('flbGoogleMapsKey');
 if(savedGoogleKey)enableGoogleSatellite(savedGoogleKey).then(r=>{if(!r.ok)console.error('Saved Google key could not enable satellite:',r.error)});
 
 const $=s=>document.querySelector(s),drawer=$('#drawer'),home=$('#homeActions'),mapBar=$('#mapBar'),stageTitle=$('#stageTitle'),pointMenu=$('#pointMenu');
-const emptyField=(name='')=>({id:Date.now()+Math.random(),name,boundary:[],sections:[],stage:'home',width:9,borderPasses:0,guidanceSets:[]});
+const emptyField=(name='')=>({id:Date.now()+Math.random(),name,boundary:[],sections:[],stage:'home',width:9,borderPasses:3,guidanceSets:[]});
 let legacy=JSON.parse(localStorage.getItem('flb13')||'null'),DB=JSON.parse(localStorage.getItem('flbFields')||'null');
 if(!DB)DB={fields:legacy&&legacy.name?[{...legacy,id:legacy.id||Date.now()}]:[],currentId:legacy&&legacy.name?(legacy.id||Date.now()):null};
 let S=DB.fields.find(f=>f.id===DB.currentId)||emptyField();
@@ -156,8 +156,7 @@ function guidanceOptions(source,additional=false){
  if(additional)$('#coverage').onchange=()=>$('#qtyBox').classList.toggle('hidden',$('#coverage').value!=='count');else $('#coverage').onchange=()=>$('#countLab').classList.toggle('hidden',$('#coverage').value!=='count');
  $('#preview').onclick=()=>generateGuidance(source,additional);$('#back').onclick=()=>{if(source==='ab'||source==='curve')startGuideDraft(source,additional);else guidanceMenu()}
 }
-function activeBorderPasses(){let has=(S.guidanceSets||[]).some(x=>x.kind==='headland'&&x.lines&&x.lines.length);return has?Math.max(0,+S.borderPasses||0):0}
-function usablePoly(){let p=poly(true),bp=activeBorderPasses();if(bp>0){let b=turf.buffer(p,-bp*S.width/1000,{units:'kilometers'});if(b&&b.geometry.type==='Polygon')return b}return p}
+function usablePoly(){let p=poly(true);if(S.borderPasses>0){let b=turf.buffer(p,-S.borderPasses*S.width/1000,{units:'kilometers'});if(b&&b.geometry.type==='Polygon')return b}return p}
 function polygonBoundaries(p){
  try{let q=turf.polygonToLine(p);return q.type==='FeatureCollection'?q.features:[q]}catch{return[]}
 }
@@ -228,17 +227,8 @@ function extendGeneratedCurve(line,p){
  let after=turf.destination(e,diag,eb,{units:'meters'}).geometry.coordinates;
  return turf.lineString([before,...c,after]);
 }
-function cleanReferenceLine(base){
- let c=base.geometry.coordinates||[];if(c.length<3)return base;
- let out=[c[0]],last=turf.point(c[0]);
- // Dense hand-drawn boundaries can contain duplicate/near-duplicate vertices.
- // Turf lineOffset can reject those. Remove only sub-10cm duplicates; preserve shape.
- for(let i=1;i<c.length;i++){let q=turf.point(c[i]);if(turf.distance(last,q,{units:'meters'})>=.10||i===c.length-1){out.push(c[i]);last=q}}
- return turf.lineString(out.length>=2?out:[c[0],c[c.length-1]]);
-}
 function curvedOffset(base,off,p){
  try{
-  base=cleanReferenceLine(base);
   // IMPORTANT: offset the REAL reference first.  Extending the reference before
   // lineOffset changes the end geometry and was the source of the fan/wedge rows
   // seen on curved borders.  Once the parallel curve exists, extend THAT curve
@@ -289,7 +279,7 @@ function generateGuidance(source,additional=false){
  let right=additional&&coverage==='count'?Math.max(0,+($('#rightQty')?.value||0)):Infinity;
  let offsets=[],sweep=fieldSweepSteps(p,width);
  if(source==='border'){
-  let start=(activeBorderPasses()+.5)*width,side=chooseBorderSide(base,p,start);
+  let start=(S.borderPasses+.5)*width,side=chooseBorderSide(base,p,start);
   if(!side)return alert('No guidance lines could be created from this reference.');
   let maxRows=additional&&coverage==='count'?Math.max(left,right):(!additional&&coverage==='count'?requested:sweep);
   for(let i=0;i<maxRows;i++)offsets.push(side*(start+i*width));
