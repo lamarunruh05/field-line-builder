@@ -41,6 +41,12 @@ let S=DB.fields.find(f=>f.id===DB.currentId)||emptyField();
 let gpsWatchId=null,gpsRecording=false,gpsLastAccepted=null,gpsMarker=null,gpsAccuracyCircle=null,gpsReadyFix=null,gpsSettings={spacing:3,maxAccuracy:15};
 let currentBackAction=null,isHomeScreen=false,backGuardReady=false;
 let mode=null,selected=-1,first=-1,op=null,suppressNextMapTap=false,layer=L.layerGroup().addTo(map),guide=L.layerGroup().addTo(map),handle=null,polyLayer=null,dotMarkers=[],editHistory=[],guideDraft=null,guideMarkers=[],guideHandle=null,highlightLayer=null;
+// Geometry smoothing is relatively expensive on a phone. Cache fitted paths so ordinary
+// map redraws/zooms do not refit the same curve over and over.
+const smoothCache=new Map();
+let effectiveCacheKey='',effectiveCacheValue=null;
+let saveTimer=null;
+function scheduleSave(){clearTimeout(saveTimer);saveTimer=setTimeout(save,180)}
 
 function save(){if(S&&S.name){let i=DB.fields.findIndex(f=>f.id===S.id);if(i>=0)DB.fields[i]=S;else DB.fields.push(S);DB.currentId=S.id}localStorage.setItem('flbFields',JSON.stringify(DB));localStorage.setItem('flb13',JSON.stringify(S))}
 function open(html){isHomeScreen=false;removeHandle();removeGuideHandle();hidePointMenu();mapBar.classList.add('hidden');stageTitle.classList.add('hidden');drawer.innerHTML=html;drawer.classList.remove('hidden');home.classList.add('hidden');refreshBackAction()}
@@ -55,6 +61,8 @@ function forwardIdx(a,b){let out=[a],i=a,n=S.boundary.length;while(i!==b){i=(i+1
 function pathMeters(arr){let d=0;for(let k=1;k<arr.length;k++)d+=turf.distance([S.boundary[arr[k-1]][1],S.boundary[arr[k-1]][0]],[S.boundary[arr[k]][1],S.boundary[arr[k]][0]],{units:'meters'});return d}
 function idxs(a,b){let f=forwardIdx(a,b),r=forwardIdx(b,a).reverse();return pathMeters(f)<=pathMeters(r)?f:r}
 function smoothLatLngs(points,maxMoveMeters=.50){
+ const cacheKey=maxMoveMeters+'|'+points.map(p=>p[0].toFixed(8)+','+p[1].toFixed(8)).join(';');
+ if(smoothCache.has(cacheKey))return smoothCache.get(cacheKey).map(p=>p.slice());
  // Smooth fitted path for steering. User points define a +/- maxMoveMeters corridor,
  // rather than hard corners. Endpoints stay fixed. The final spline is clamped back
  // to that corridor so smoothing can remove small GPS/drawing wiggles without
@@ -96,6 +104,8 @@ function smoothLatLngs(points,maxMoveMeters=.50){
   let q=near.geometry.coordinates,ratio=maxMoveMeters/d;
   return [q[1]+(ll[0]-q[1])*ratio,q[0]+(ll[1]-q[0])*ratio];
  });
+ if(smoothCache.size>24)smoothCache.delete(smoothCache.keys().next().value);
+ smoothCache.set(cacheKey,dense.map(p=>p.slice()));
  return dense
 }
 function sectionIndices(s){
@@ -111,6 +121,8 @@ function forwardSectionPath(s){
  return p[1]===(p[0]+1)%n?p:p.slice().reverse()
 }
 function effectiveBoundaryLatLngs(){
+ let cacheKey=JSON.stringify([S.id,S.boundary,(S.sections||[]).map(s=>[s.start,s.end,s.path,s.smooth])]);
+ if(cacheKey===effectiveCacheKey&&effectiveCacheValue)return effectiveCacheValue.map(p=>p.slice());
  let n=S.boundary.length;if(n<3)return boundaryLatLngs();
  let smooth=(S.sections||[]).filter(s=>s.smooth).map(s=>({s,path:forwardSectionPath(s)})).filter(o=>o.path.length>1);
  if(!smooth.length)return boundaryLatLngs();
@@ -123,7 +135,9 @@ function effectiveBoundaryLatLngs(){
   if(o){let pts=o.path.map(j=>S.boundary[j]),sm=smoothLatLngs(pts);out.push(...sm.slice(0,-1).map(p=>p.slice()));edges+=o.path.length-1;i=o.path[o.path.length-1];continue}
   out.push(S.boundary[i].slice());i=(i+1)%n;edges++
  }
- return out.length>=3?out:boundaryLatLngs()
+ let result=out.length>=3?out:boundaryLatLngs();
+ effectiveCacheKey=cacheKey;effectiveCacheValue=result.map(p=>p.slice());
+ return result
 }
 function ring(useEffective=true){let src=useEffective?effectiveBoundaryLatLngs():boundaryLatLngs(),r=src.map(([a,b])=>[b,a]);if(r.length)r.push(r[0]);return r}
 function poly(useEffective=true){let r=ring(useEffective);return r.length>3?turf.polygon([r]):null}
@@ -137,7 +151,7 @@ function redraw(){
  }
  for(const set of S.guidanceSets||[])for(const g of set.lines)L.polyline(g,{color:set.kind==='headland'?'#e18a00':'#27633f',weight:2,interactive:false}).addTo(guide);
  if(guideDraft){let pts=guideDraft.points||[];if(pts.length>1)L.polyline(guideDraft.type==='curve'?smoothLatLngs(pts):pts,{color:'#8d42c7',weight:3,dashArray:'7 5',interactive:false}).addTo(guide);pts.forEach((p,i)=>{let m=L.circleMarker(p,{radius:7,color:'#8d42c7',weight:3,fillColor:'#fff',fillOpacity:1,bubblingMouseEvents:false}).addTo(guide);guideMarkers[i]=m;m.on('click',e=>{L.DomEvent.stopPropagation(e);showGuideDragHandle(i)})})}
- $('#fieldTitle').textContent=S.name?`${S.name} • ${area().toFixed(2)} ha`:'';save()
+ $('#fieldTitle').textContent=S.name?`${S.name} • ${area().toFixed(2)} ha`:'';scheduleSave()
 }
 
 $('#findMe').onclick=()=>map.locate({setView:true,maxZoom:20,enableHighAccuracy:true});
@@ -179,7 +193,7 @@ function undoEdit(){let h=editHistory.pop();if(!h)return;S.boundary=h.boundary;S
 function samePath(a,b){let A=sectionIndices(a),B=b;return A.length===B.length&&A.every((v,i)=>v===B[i])}
 function applySection(a,b){if(!op)return;let path=idxs(a,b);snapshotEdit();if(op==='name'){let n=prompt('Border name');if(!n){editHistory.pop();cancelSectionChoice();return}let old=S.sections.find(s=>samePath(s,path));if(old){old.name=n;old.path=path.slice()}else S.sections.push({start:path[0],end:path[path.length-1],path:path.slice(),name:n,smooth:false})}else if(op==='straight'){let p0=S.boundary[path[0]],p1=S.boundary[path[path.length-1]],n=path.length-1;for(let k=1;k<n;k++){let t=k/n;S.boundary[path[k]]=[p0[0]+(p1[0]-p0[0])*t,p0[1]+(p1[1]-p0[1])*t]}}else if(op==='smooth'){let sec=S.sections.find(x=>samePath(x,path));if(!sec){sec={start:path[0],end:path[path.length-1],path:path.slice(),name:'',smooth:true};S.sections.push(sec)}sec.path=path.slice();sec.smooth=true}first=-1;op=null;redraw();sectionScreen()}
 
-function viewFieldScreen(){S.stage='saved';close();mapBar.classList.remove('hidden');setMapBar(`<button id="allFields">← Fields</button><button id="editField" class="primary">Edit</button>`,'View Field');$('#allFields').onclick=showFieldsHome;$('#editField').onclick=editFieldScreen;redraw()}
+function viewFieldScreen(){S.stage='saved';close();mapBar.classList.remove('hidden');setMapBar(`<button id="allFields">← Fields</button><button id="quickExport">Export</button><button id="editField" class="primary">Edit</button>`,'View Field');$('#allFields').onclick=showFieldsHome;$('#quickExport').onclick=()=>exportScreen(viewFieldScreen);$('#editField').onclick=editFieldScreen;redraw()}
 function editFieldScreen(){S.stage='saved';open(`<h3>${escapeHtml(S.name)}</h3><div class="status">${area().toFixed(2)} ha • ${S.sections.filter(x=>x.name).length} named borders</div><div class="field-actions"><button id="guidance" class="primary">Guidance</button><button id="editGuidance">Edit Guidance</button><button id="headlands">Border Passes</button><button id="borders">Borders</button><button id="more">More ···</button></div>`);$('#guidance').onclick=guidanceMenu;$('#editGuidance').onclick=editGuidanceMenu;$('#headlands').onclick=borderPassMenu;$('#borders').onclick=bordersMenu;$('#more').onclick=moreMenu;redraw()}
 function bordersMenu(){let named=S.sections.map((s,i)=>({s,i})).filter(o=>o.s.name);open(`<h3>Saved Borders</h3><p>Tap a border to highlight it. This list stays open so you can compare borders.</p><div class="section-list">${named.length?named.map(o=>`<button data-hi="${o.i}">${escapeHtml(o.s.name)}</button>`).join(''):'<div class="status">No named borders yet.</div>'}</div><button id="back">Back</button>`);document.querySelectorAll('[data-hi]').forEach(b=>b.onclick=()=>{if(highlightLayer)map.removeLayer(highlightLayer);let s=S.sections[+b.dataset.hi];highlightLayer=L.polyline(sectionLatLngs(s),{color:'#ff2d55',weight:8,opacity:.85,interactive:false}).addTo(map);document.querySelectorAll('[data-hi]').forEach(x=>x.classList.remove('selected'));b.classList.add('selected')});$('#back').onclick=editFieldScreen}
 function borderPassMenu(){open(`<h3>Border Passes</h3><p>Create the passes planted around the outside of the field.</p><label>Implement width (m)<input id="w" type="number" step="0.01" value="${S.width||9}"></label><label>Number of border passes<input id="bp" type="number" min="0" step="1" value="${S.borderPasses??3}"></label><button id="make" class="primary">Create / Update Border Passes</button><button id="back">Back</button>`);$('#make').onclick=()=>{S.width=+$('#w').value||9;S.borderPasses=Math.max(0,+$('#bp').value||0);makeHeadlands();save();editFieldScreen()};$('#back').onclick=editFieldScreen}
@@ -370,7 +384,7 @@ function generateGuidance(source,additional=false){
  open(`<h3>Guidance Preview</h3><div class="status">${escapeHtml(name)}<br>${lines.length} guidance lines • ${width.toFixed(2)} m</div><div class="row"><button id="keep" class="primary">Save Guidance</button><button id="remove">Discard</button></div>`);$('#keep').onclick=editFieldScreen;$('#remove').onclick=()=>{S.guidanceSets.pop();redraw();guidanceMenu()}
 }
 
-function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="isoGuide" class="primary">Download IsoView Guide Map</button><button id="geo">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><div id="exportStatus" class="muted"></div><button id="back">Back</button>`);$('#isoGuide').onclick=exportIsoViewGuideMap;$('#geo').onclick=()=>downloadBlob(new Blob([JSON.stringify(fc(),null,2)],{type:'application/geo+json'}),safe(S.name)+'.geojson');$('#shp').onclick=async()=>{let b=$('#shp'),st=$('#exportStatus');try{b.disabled=true;st.textContent='Building ZIP…';let data=await shpwrite.zip(fc(),{folder:safe(S.name),outputType:'blob',types:{polygon:'boundary',polyline:'lines',point:'points'}});let blob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});downloadBlob(blob,safe(S.name)+'.zip');st.textContent='ZIP ready. Check your Downloads folder.'}catch(e){console.error(e);st.textContent='Could not create ZIP: '+(e?.message||e)}finally{b.disabled=false}};$('#back').onclick=editFieldScreen}
+function exportScreen(backAction=editFieldScreen){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="isoGuide" class="primary">Download IsoView Guide Map</button><button id="geo">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><div id="exportStatus" class="muted"></div><button id="back">Back</button>`);$('#isoGuide').onclick=exportIsoViewGuideMap;$('#geo').onclick=()=>downloadBlob(new Blob([JSON.stringify(fc(),null,2)],{type:'application/geo+json'}),safe(S.name)+'.geojson');$('#shp').onclick=async()=>{let b=$('#shp'),st=$('#exportStatus');try{b.disabled=true;st.textContent='Building ZIP…';let data=await shpwrite.zip(fc(),{folder:safe(S.name),outputType:'blob',types:{polygon:'boundary',polyline:'lines',point:'points'}});let blob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});downloadBlob(blob,safe(S.name)+'.zip');st.textContent='ZIP ready. Check your Downloads folder.'}catch(e){console.error(e);st.textContent='Could not create ZIP: '+(e?.message||e)}finally{b.disabled=false}};$('#back').onclick=backAction}
 function densifyIsoViewLine(latlngs,maxMeters=1){
  let coords=latlngs.map(([lat,lng])=>[lng,lat]);
  if(coords.length<2)return coords;
