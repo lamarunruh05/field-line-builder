@@ -54,20 +54,49 @@ function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':
 function forwardIdx(a,b){let out=[a],i=a,n=S.boundary.length;while(i!==b){i=(i+1)%n;out.push(i);if(out.length>n+1)break}return out}
 function pathMeters(arr){let d=0;for(let k=1;k<arr.length;k++)d+=turf.distance([S.boundary[arr[k-1]][1],S.boundary[arr[k-1]][0]],[S.boundary[arr[k]][1],S.boundary[arr[k]][0]],{units:'meters'});return d}
 function idxs(a,b){let f=forwardIdx(a,b),r=forwardIdx(b,a).reverse();return pathMeters(f)<=pathMeters(r)?f:r}
-function smoothLatLngs(points){
- // Shape-preserving Chaikin smoothing: follows the user's polyline and cannot overshoot like a spline.
+function smoothLatLngs(points,maxMoveMeters=.50){
+ // Smooth fitted path for steering. User points define a +/- maxMoveMeters corridor,
+ // rather than hard corners. Endpoints stay fixed. The final spline is clamped back
+ // to that corridor so smoothing can remove small GPS/drawing wiggles without
+ // materially moving the intended border.
  if(points.length<3)return points.map(p=>p.slice());
- let pts=points.map(p=>p.slice());
- for(let pass=0;pass<3;pass++){
-  let out=[pts[0].slice()];
-  for(let i=0;i<pts.length-1;i++){
-   let a=pts[i],b=pts[i+1];
-   out.push([a[0]*.75+b[0]*.25,a[1]*.75+b[1]*.25]);
-   out.push([a[0]*.25+b[0]*.75,a[1]*.25+b[1]*.75]);
+ let original=points.map(p=>p.slice());
+ let originalLine=turf.lineString(original.map(([lat,lng])=>[lng,lat]));
+ let lat0=original.reduce((n,p)=>n+p[0],0)/original.length;
+ let mx=111320*Math.cos(lat0*Math.PI/180), my=111320;
+ let x0=original[0][1],y0=original[0][0];
+ let toXY=p=>[(p[1]-x0)*mx,(p[0]-y0)*my];
+ let toLL=q=>[y0+q[1]/my,x0+q[0]/mx];
+ let origXY=original.map(toXY),fit=origXY.map(q=>q.slice());
+ // Fair the control polygon. Each original point may move at most 50 cm.
+ for(let pass=0;pass<18;pass++){
+  let next=fit.map(q=>q.slice());
+  for(let i=1;i<fit.length-1;i++){
+   let target=[(fit[i-1][0]+2*fit[i][0]+fit[i+1][0])/4,(fit[i-1][1]+2*fit[i][1]+fit[i+1][1])/4];
+   let dx=target[0]-origXY[i][0],dy=target[1]-origXY[i][1],d=Math.hypot(dx,dy);
+   if(d>maxMoveMeters){dx*=maxMoveMeters/d;dy*=maxMoveMeters/d}
+   next[i]=[origXY[i][0]+dx,origXY[i][1]+dy];
   }
-  out.push(pts[pts.length-1].slice());pts=out;
+  fit=next;
  }
- return pts
+ // Catmull-Rom gives continuous tangent changes instead of visible corners.
+ let dense=[];
+ const cr=(a,b,c,d,t)=>{let t2=t*t,t3=t2*t;return .5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t2+(-a+3*b-3*c+d)*t3)};
+ for(let i=0;i<fit.length-1;i++){
+  let p0=fit[Math.max(0,i-1)],p1=fit[i],p2=fit[i+1],p3=fit[Math.min(fit.length-1,i+2)];
+  let seg=Math.hypot(p2[0]-p1[0],p2[1]-p1[1]),steps=Math.max(2,Math.ceil(seg/1.0));
+  for(let j=0;j<steps;j++){let t=j/steps;dense.push(toLL([cr(p0[0],p1[0],p2[0],p3[0],t),cr(p0[1],p1[1],p2[1],p3[1],t)]))}
+ }
+ dense.push(original[original.length-1].slice());
+ // Clamp every spline sample to <= 0.50 m from the ORIGINAL polyline.
+ dense=dense.map((ll,i)=>{
+  if(i===0)return original[0].slice(); if(i===dense.length-1)return original[original.length-1].slice();
+  let pt=turf.point([ll[1],ll[0]]),near=turf.nearestPointOnLine(originalLine,pt,{units:'meters'}),d=near.properties.dist||0;
+  if(d<=maxMoveMeters)return ll;
+  let q=near.geometry.coordinates,ratio=maxMoveMeters/d;
+  return [q[1]+(ll[0]-q[1])*ratio,q[0]+(ll[1]-q[0])*ratio];
+ });
+ return dense
 }
 function sectionIndices(s){
  if(Array.isArray(s.path)&&s.path.length>1)return s.path.slice();
@@ -342,7 +371,7 @@ function generateGuidance(source,additional=false){
 }
 
 function exportScreen(){open(`<h3>Export</h3><p>Download the current field, named borders, border passes, and guidance sets.</p><button id="isoGuide" class="primary">Download IsoView Guide Map</button><button id="geo">Download GeoJSON</button><button id="shp">Download Shapefile ZIP</button><div id="exportStatus" class="muted"></div><button id="back">Back</button>`);$('#isoGuide').onclick=exportIsoViewGuideMap;$('#geo').onclick=()=>downloadBlob(new Blob([JSON.stringify(fc(),null,2)],{type:'application/geo+json'}),safe(S.name)+'.geojson');$('#shp').onclick=async()=>{let b=$('#shp'),st=$('#exportStatus');try{b.disabled=true;st.textContent='Building ZIP…';let data=await shpwrite.zip(fc(),{folder:safe(S.name),outputType:'blob',types:{polygon:'boundary',polyline:'lines',point:'points'}});let blob=data instanceof Blob?data:new Blob([data],{type:'application/zip'});downloadBlob(blob,safe(S.name)+'.zip');st.textContent='ZIP ready. Check your Downloads folder.'}catch(e){console.error(e);st.textContent='Could not create ZIP: '+(e?.message||e)}finally{b.disabled=false}};$('#back').onclick=editFieldScreen}
-function densifyIsoViewLine(latlngs,maxMeters=3){
+function densifyIsoViewLine(latlngs,maxMeters=1){
  let coords=latlngs.map(([lat,lng])=>[lng,lat]);
  if(coords.length<2)return coords;
  let line=turf.lineString(coords),km=turf.length(line,{units:'kilometers'});
@@ -372,7 +401,7 @@ function isoViewGuideEntries(){
  let head=(S.guidanceSets||[]).find(x=>x.kind==='headland'&&x.lines&&x.lines.length);
  if(head){
   // Borders is one closed perimeter reference. Keep it as one Project map.
-  let coords=densifyIsoViewLine(head.lines[0],3);
+  let coords=densifyIsoViewLine(head.lines[0],1);
   if(coords.length>=2){
    let label='Borders',base=uniqueIsoBase(label,used);
    entries.push({base,label,fc:turf.featureCollection([turf.lineString(coords,{GUIDE:1,NAME:label,TYPE:'BORDERS'})]),lineCount:1});
@@ -381,7 +410,7 @@ function isoViewGuideEntries(){
  mainSets().forEach((set,setIndex)=>{
   let first=(set.lines||[]).find(g=>Array.isArray(g)&&g.length>=2);
   if(!first)return;
-  let coords=densifyIsoViewLine(first,3); if(coords.length<2)return;
+  let coords=densifyIsoViewLine(first,1); if(coords.length<2)return;
   let label=(String(set.name||'').trim()||(setIndex===0?'Main Guide':'Additional Guide '+setIndex));
   let base=uniqueIsoBase(label,used);
   entries.push({base,label,fc:turf.featureCollection([turf.lineString(coords,{GUIDE:setIndex+1,NAME:label.slice(0,40),TYPE:'PROJECT'})]),lineCount:1});
