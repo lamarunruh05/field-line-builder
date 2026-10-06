@@ -35,3 +35,22 @@
 .mapbar .bar-actions{display:flex;align-items:center;justify-content:center;gap:7px}
 .mapbar .bar-actions button{flex:0 1 auto}.mapbar .bar-actions span{flex:0 0 auto}
 @media(max-width:520px){#topbar{top:12px!important;max-width:calc(100vw - 150px)!important;padding:8px 12px!important}#topbar b{font-size:16px}.leaflet-top.leaflet-left{top:74px!important}.find-me,.fields-home{top:74px!important}.mapbar .bar-title{font-size:11px}}
+
+/* v2.3 — full-width shallow header and compact map controls */
+#topbar{
+  top:0!important;left:0!important;right:0!important;transform:none!important;
+  width:100%!important;max-width:none!important;min-height:56px!important;height:56px!important;
+  padding:7px 12px 7px 16px!important;border-radius:0!important;
+  display:flex!important;align-items:center!important;justify-content:space-between!important;
+  background:#fff!important;box-shadow:0 2px 12px #0003!important;gap:8px!important;
+}
+.topbar-title{display:flex;align-items:center;gap:12px;min-width:0;overflow:hidden}
+#topbar b{font-size:18px!important;line-height:1!important;white-space:nowrap}
+#topbar span{font-size:13px!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.header-menu{width:42px;height:42px;flex:0 0 42px;border:0;background:transparent;border-radius:10px;font-size:25px;font-weight:800;padding:0;line-height:1}
+.fields-home{display:none!important}
+.leaflet-top.leaflet-left{top:66px!important;left:10px!important;gap:6px!important}
+.leaflet-control-zoom a{width:36px!important;height:36px!important;line-height:36px!important;font-size:22px!important}
+.leaflet-control-layers{transform:scale(.88);transform-origin:top left}
+.find-me{top:66px!important;right:12px!important;width:40px!important;height:40px!important;border-radius:12px!important;font-size:18px!important}
+@media(max-width:520px){#topbar{top:0!important;height:56px!important;min-height:56px!important;padding:7px 10px 7px 14px!important}#topbar b{font-size:17px!important}.leaflet-top.leaflet-left{top:66px!important}.find-me{top:66px!important}}
